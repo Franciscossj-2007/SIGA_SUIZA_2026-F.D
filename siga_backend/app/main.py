@@ -30,15 +30,17 @@ app = FastAPI(
     redoc_url="/redoc" if settings.debug else None,
 )
 
-# CORS para desarrollo
+# CORS para desarrollo y producción (Vercel)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173",
-    "http://localhost:5174", "http://127.0.0.1:5174",
-    "http://localhost:3000", "http://127.0.0.1:3000",
-    "http://localhost:3001", "http://127.0.0.1:3001"
+    allow_origins=[
+        "http://localhost:5173", "http://127.0.0.1:5173",
+        "http://localhost:5174", "http://127.0.0.1:5174",
+        "http://localhost:3000", "http://127.0.0.1:3000",
+        "http://localhost:3001", "http://127.0.0.1:3001",
+        "https://siga-suiza-2026-f-2hwh216nt-blue-label2.vercel.app",
     ],
-    allow_origin_regex=r"https?://.*",
+    allow_origin_regex=r"https?://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -186,10 +188,7 @@ async def module_proxy(request: Request, module_name: str, path: str = "",
     """
     🔀 Proxy dinámico que redirige todas las rutas /api/{modulo}/* 
     a los módulos correspondientes con autenticación y autorización.
-    
-    Frontend → Core (Gateway) → Módulo Externo → Core → Frontend
     """
-    # Autenticar request
     user = await sm_module.security_middleware.authenticate_request(request, authorization)
     
     logger.info(f"🔀 Proxy: {request.method} /api/{module_name}/{path} - User: {user['email'] if user else 'Anonymous'}")
@@ -205,15 +204,12 @@ async def websocket_endpoint(websocket: WebSocket):
     
     try:
         while True:
-            # Escuchar mensajes del cliente
             data = await websocket.receive_text()
             logger.info(f"📨 WS [{client_id}]: {data}")
             
-            # Procesar mensaje (ejemplo simple)
             if data == "ping":
                 await ws_gateway.send_personal_message("pong", client_id)
             else:
-                # Broadcast a todos los clientes
                 await ws_gateway.broadcast(f"Client {client_id}: {data}")
                 
     except WebSocketDisconnect:
@@ -245,57 +241,41 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 # === MANEJADORES DE EVENTOS ===
 async def handle_user_created(event):
-    """Maneja eventos de usuario creado"""
     logger.info(f"👤 Usuario creado: {event.data}")
-    # Notificar via WebSocket
     await ws_gateway.broadcast(f"Usuario creado: {event.data.get('email', 'Unknown')}")
 
 async def handle_module_registered(event):
-    """Maneja eventos de módulo registrado"""
     logger.info(f"📦 Módulo registrado: {event.data['module_name']} v{event.data['version']}")
-    # Notificar via WebSocket
     await ws_gateway.broadcast(f"Módulo {event.data['module_name']} registrado")
 
 # === INICIALIZACIÓN DEL CORE ===
 async def initialize_core():
-    """Inicializa el Core al arrancar"""
     logger.info(f"🚀 Iniciando {settings.app_name} en modo {settings.environment}")
     
-    # 1. Inicializar servicios de Identity - CORREGIDO
     logger.info("🔐 Inicializando sistema de identidad...")
-    
-    # Crear una sesión manualmente, no usar el generador
     from .core.identity.database import AsyncSessionLocal
     
     async with AsyncSessionLocal() as db:
         auth_service = AuthService(db)
         sm_module.init_security_middleware(auth_service)
         
-        # 🆕 SISTEMA DE SEEDING PROFESIONAL
         from .core.identity.seeds.seeder_runner import SeederRunner
         seeder_runner = SeederRunner(db)
         await seeder_runner.run_all()
     
-    # 2. Conectar Event Bus si está habilitado
     if settings.enable_nats:
         nats_connected = await event_bus.connect()
         if nats_connected:
             logger.info("✅ NATS Event Bus inicializado")
-            
-            # Suscribir a eventos del sistema
             await event_bus.subscribe("user.created", handle_user_created)
             await event_bus.subscribe("module.registered", handle_module_registered)
         else:
             logger.warning("⚠️  NATS no disponible - Continuando sin Event Bus")
     
-    # 3. Descubrir módulos si está habilitado
     if settings.modules_auto_discover:
         discovered = await module_runtime.discover_modules()
         logger.info(f"📦 Módulos descubiertos: {len(discovered)}")
     
-   
-    
-    # 5. Publicar evento de core iniciado
     if settings.enable_nats and event_bus.connected:
         core_event = EventFactory.create_event(
             event_type=EventType.CORE_STARTED,
@@ -305,14 +285,7 @@ async def initialize_core():
         await event_bus.publish(core_event)
     
     logger.info("🎯 Core inicializado correctamente")
-    logger.info(f"   • Módulos registrados: {len(module_runtime.modules)}")
-    logger.info(f"   • Gateway HTTP: ACTIVO")
-    logger.info(f"   • Gateway WebSocket: ACTIVO")
-    logger.info(f"   • Event Bus: {'ACTIVO' if event_bus.connected else 'INACTIVO'}")
-    logger.info(f"   • Sistema de Identidad: ACTIVO")
-    logger.info(f"   • Environment: {settings.environment}")
 
-# Eventos de startup/shutdown
 @app.on_event("startup")
 async def startup_event():
     await initialize_core()
@@ -321,10 +294,8 @@ async def startup_event():
 async def shutdown_event():
     logger.info("🛑 Cerrando gateway HTTP...")
     await http_gateway.close()
-    
     logger.info("🛑 Cerrando Event Bus...")
     await event_bus.close()
-    
     logger.info("🛑 Core deteniéndose...")
 
 if __name__ == "__main__":
