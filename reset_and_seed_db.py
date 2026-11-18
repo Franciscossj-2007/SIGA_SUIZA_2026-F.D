@@ -1,6 +1,7 @@
+import os
+from urllib.parse import urlparse
 import psycopg2
 from psycopg2 import sql
-import os
 
 database_url = os.getenv('DATABASE_URL')
 if database_url:
@@ -20,14 +21,15 @@ else:
 print("=== SIGA: Reset y Siembra de Base de Datos ===")
 print(f"Conectando a {DB_USER}@{DB_HOST}:{DB_PORT}/{DB_NAME}...")
 
-conn = psycopg2.connect(
-    host=DB_HOST,
-    port=DB_PORT,
-    user=DB_USER,
-    password=DB_PASSWORD,
-    database=DB_NAME,
-    sslmode='require'
-)
+try:
+    conn = psycopg2.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=DB_NAME,
+        sslmode='require'
+    )
     conn.autocommit = True
     cur = conn.cursor()
     
