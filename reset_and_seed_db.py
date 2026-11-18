@@ -2,23 +2,32 @@ import psycopg2
 from psycopg2 import sql
 import os
 
-DB_HOST = os.getenv('DB_HOST', 'localhost')
-DB_PORT = os.getenv('DB_PORT', '5432')
-DB_USER = os.getenv('DB_USER', 'postgres')
-DB_PASSWORD = os.getenv('DB_PASSWORD', 'admin123')
-DB_NAME = os.getenv('DB_NAME', 'siga_local')
+database_url = os.getenv('DATABASE_URL')
+if database_url:
+    url = urlparse(database_url)
+    DB_HOST = url.hostname
+    DB_PORT = url.port
+    DB_USER = url.username
+    DB_PASSWORD = url.password
+    DB_NAME = url.path[1:]
+else:
+    DB_HOST = 'localhost'
+    DB_PORT = '5432'
+    DB_USER = 'postgres'
+    DB_PASSWORD = 'admin123'
+    DB_NAME = 'siga_local'
 
 print("=== SIGA: Reset y Siembra de Base de Datos ===")
 print(f"Conectando a {DB_USER}@{DB_HOST}:{DB_PORT}/{DB_NAME}...")
 
-try:
-    conn = psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        database=DB_NAME
-    )
+conn = psycopg2.connect(
+    host=DB_HOST,
+    port=DB_PORT,
+    user=DB_USER,
+    password=DB_PASSWORD,
+    database=DB_NAME,
+    sslmode='require'
+)
     conn.autocommit = True
     cur = conn.cursor()
     

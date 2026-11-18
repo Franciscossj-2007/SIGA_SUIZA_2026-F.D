@@ -102,7 +102,7 @@ async def core_status():
 # === ENDPOINTS DE AUTENTICACIÓN ===
 @app.post("/auth/register")
 async def register_user(email: str, password: str, full_name: str = None, 
-                       db: AsyncSession = Depends(get_identity_db)):
+                    db: AsyncSession = Depends(get_identity_db)):
     """Endpoint para registro de usuarios"""
     auth_service = AuthService(db)
     result = await auth_service.register_user(email, password, full_name)
