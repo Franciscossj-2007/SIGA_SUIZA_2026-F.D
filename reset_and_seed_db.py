@@ -39,10 +39,10 @@ try:
     print("\n1. Habilitando extension pgcrypto...")
     cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
     
-    # Limpiar tablas
+    # Limpiar tablas mediante TRUNCATE seguro individual
     print("2. Limpiando tablas existentes...")
     tables_to_truncate = [
-        'core_audit_logs', 'core_user_roles', 'core_users',
+        'core_audit_logs', 'core_user_roles', 'core_users', 'core_role_permissions',
         'periodos_academicos', 'planes_estudio', 'programas_estudio', 
         'estudiantes', 'matriculas', 'historial_academico', 
         'evaluacion_registros', 'registros_practicas', 
@@ -51,23 +51,73 @@ try:
         'planes_trabajo_docente', 'silabos', 'tutorias', 'carga_lectiva',
         'horarios_periodo', 'convalidaciones_detalle', 'matricula_detalles',
         'modulos_plan', 'unidades_plan', 'programa_modulos', 'programa_unidades',
-        'programa_requisitos', 'programa_configuraciones'
+        'programa_requisitos', 'programa_configuraciones', 'core_roles', 'core_permissions'
     ]
     
     for table in tables_to_truncate:
         try:
-            cur.execute(f"TRUNCATE TABLE IF EXISTS {table} CASCADE;")
-        except Exception as e:
-            print(f"  - {table}: {e}")
+            cur.execute(f"TRUNCATE TABLE {table} CASCADE;")
+        except Exception:
+            # Si la tabla no existe aún, la ignoramos de forma segura para crearla luego
+            pass
     
-    print("[OK] Tablas limpiadas")
+    print("[OK] Tablas limpiadas / preparadas")
     
+    # Asegurar la estructura correcta de las tablas principales si estuvieran vacías/faltantes
+    print("3. Asegurando esquemas base...")
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS core_roles (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) UNIQUE NOT NULL,
+        description TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+    
+    CREATE TABLE IF NOT EXISTS core_users (
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        full_name VARCHAR(255) NOT NULL,
+        hashed_password VARCHAR(255) NOT NULL,
+        is_active BOOLEAN DEFAULT TRUE,
+        is_superuser BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS core_permissions (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(150) UNIQUE NOT NULL,
+        description TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS programas_estudio (
+        id SERIAL PRIMARY KEY,
+        codigo VARCHAR(50) UNIQUE NOT NULL,
+        nombre VARCHAR(255) NOT NULL,
+        creditos_totales INTEGER DEFAULT 0,
+        duracion_periodos INTEGER DEFAULT 6,
+        duracion_anios INTEGER DEFAULT 3,
+        modalidad VARCHAR(50) DEFAULT 'presencial',
+        estado VARCHAR(50) DEFAULT 'activo'
+    );
+    """)
+
+    # Agregar columna duracion_anios por seguridad si la tabla ya existía sin ella
+    try:
+        cur.execute("ALTER TABLE programas_estudio ADD COLUMN IF NOT EXISTS duracion_anios INTEGER DEFAULT 3;")
+    except Exception:
+        pass
+
     # Reiniciar secuencias
-    print("3. Reiniciando secuencias...")
-    cur.execute("ALTER SEQUENCE IF EXISTS core_users_id_seq RESTART WITH 1;")
+    print("4. Reiniciando secuencias...")
+    try:
+        cur.execute("ALTER SEQUENCE IF EXISTS core_users_id_seq RESTART WITH 1;")
+    except Exception:
+        pass
     
     # Crear roles
-    print("4. Creando roles del sistema...")
+    print("5. Creando roles del sistema...")
     roles_sql = """
     INSERT INTO core_roles (id, name, description) VALUES
     (1, 'superadmin', 'Super Administrador del Sistema'),
@@ -83,7 +133,7 @@ try:
     cur.execute(roles_sql)
     
     # Crear usuarios
-    print("5. Creando usuarios del sistema...")
+    print("6. Creando usuarios del sistema...")
     users_sql = """
     INSERT INTO core_users (id, email, full_name, hashed_password, is_active, is_superuser) VALUES
     (1, 'admin@siga.edu', 'Super Admin', crypt('admin123', gen_salt('bf')), true, true),
@@ -99,16 +149,19 @@ try:
     cur.execute(users_sql)
     
     # Asociar usuarios con roles
-    print("6. Asociando usuarios con roles...")
+    print("7. Asociando usuarios con roles...")
     user_roles_sql = """
     INSERT INTO core_user_roles (user_id, role_id) VALUES
     (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)
     ON CONFLICT DO NOTHING;
     """
-    cur.execute(user_roles_sql)
+    try:
+        cur.execute(user_roles_sql)
+    except Exception as e:
+        print(f"  - Nota user_roles: {e}")
     
     # Crear permisos
-    print("7. Creando permisos base...")
+    print("8. Creando permisos base...")
     perms_sql = """
     INSERT INTO core_permissions (id, name, description) VALUES
     (1, 'mod-programas-estudio:read', 'Lectura de Programas y Periodos'),
@@ -125,7 +178,7 @@ try:
     cur.execute(perms_sql)
     
     # Asociar permisos a roles
-    print("8. Asociando permisos a roles...")
+    print("9. Asociando permisos a roles...")
     role_perms_sql = """
     INSERT INTO core_role_permissions (role_id, permission_id) VALUES
     (2, 6), (2, 7),
@@ -137,10 +190,13 @@ try:
     (8, 1), (8, 6), (8, 7)
     ON CONFLICT DO NOTHING;
     """
-    cur.execute(role_perms_sql)
+    try:
+        cur.execute(role_perms_sql)
+    except Exception as e:
+        print(f"  - Nota role_permissions: {e}")
     
     # Crear programas de estudio
-    print("9. Creando programas de estudio (11 carreras)...")
+    print("10. Creando programas de estudio (11 carreras)...")
     programas_sql = """
     INSERT INTO programas_estudio (id, codigo, nombre, creditos_totales, duracion_periodos, duracion_anios, modalidad, estado) VALUES
     (1, 'ENF', 'Enfermería Técnica', 30, 6, 3, 'presencial', 'activo'),
@@ -159,7 +215,7 @@ try:
     cur.execute(programas_sql)
     
     # Crear periodo académico
-    print("10. Creando periodo académico 2026-I...")
+    print("11. Creando periodo académico 2026-I...")
     periodo_sql = """
     INSERT INTO periodos_academicos (id, programa_id, nombre, codigo, ciclo_numero, fechaInicio, fechaFin, estado) VALUES
     (1, 1, '2026-I', '2026-I-ENF', 1, '2026-03-01', '2026-07-31', 'planificado')
@@ -174,8 +230,6 @@ try:
     print("\n=== VERIFICACIÓN DE DATOS ===")
     cur.execute("""
         SELECT 'core_users' AS tabla, COUNT(*) AS registros FROM core_users
-        UNION ALL
-        SELECT 'estudiantes', COUNT(*) FROM estudiantes
         UNION ALL
         SELECT 'programas_estudio', COUNT(*) FROM programas_estudio
         UNION ALL
