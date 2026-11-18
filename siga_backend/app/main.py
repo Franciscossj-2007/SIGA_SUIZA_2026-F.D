@@ -30,17 +30,10 @@ app = FastAPI(
     redoc_url="/redoc" if settings.debug else None,
 )
 
-# CORS para desarrollo y producción (Vercel)
+# CORS abierto para desarrollo y cualquier entorno de Vercel
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173", "http://127.0.0.1:5173",
-        "http://localhost:5174", "http://127.0.0.1:5174",
-        "http://localhost:3000", "http://127.0.0.1:3000",
-        "http://localhost:3001", "http://127.0.0.1:3001",
-        "https://siga-suiza-2026-f-2hwh216nt-blue-label2.vercel.app",
-    ],
-    allow_origin_regex=r"https?://.*\.vercel\.app",
+    allow_origins=["*"],  # Permite cualquier origen (ideal para evitar bloqueos con previews dinámicas de Vercel)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
