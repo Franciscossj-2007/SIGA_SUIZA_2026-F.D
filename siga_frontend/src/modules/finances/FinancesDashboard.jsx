@@ -180,7 +180,7 @@ export function FinancesDashboard() {
   const dossierStudentId = selectedStudentForDossier?.id;
   useEffect(() => {
     if (!dossierStudentId) {
-      setDossierStatement(null);
+      queueMicrotask(() => setDossierStatement(null));
       return undefined;
     }
     let cancelled = false;
@@ -241,7 +241,7 @@ export function FinancesDashboard() {
 
   // Reset de página al cambiar filtros
   useEffect(() => {
-    setCurrentPage(1);
+    queueMicrotask(() => setCurrentPage(1));
   }, [searchTerm, filterCareer, viewMode]);
 
   const totalPages = Math.ceil(filteredStudents.length / itemsPerPage) || 1;

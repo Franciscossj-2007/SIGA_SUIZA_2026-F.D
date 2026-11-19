@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, status, Request, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from typing import List, Optional
 from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict
@@ -9,6 +9,41 @@ from models import PlanEstudio, ModuloPlan, UnidadPlan
 from excel_parser import ExcelMineduParser
 
 router = APIRouter()
+
+
+async def _reemplazar_modulos(db: AsyncSession, plan_id: int, modulos: List[dict]) -> int:
+    existentes = (await db.execute(
+        select(ModuloPlan).where(ModuloPlan.plan_id == plan_id)
+    )).scalars().all()
+    for modulo in existentes:
+        await db.execute(delete(UnidadPlan).where(UnidadPlan.modulo_id == modulo.id))
+        await db.delete(modulo)
+    await db.flush()
+
+    for mod_data in modulos:
+        unidades = list(mod_data.get("unidades") or [])
+        db_modulo = ModuloPlan(
+            plan_id=plan_id,
+            codigo=mod_data.get("codigo"),
+            nombre=mod_data.get("nombre"),
+            horas=mod_data.get("horas", 0),
+            creditos=mod_data.get("creditos", 0),
+            orden=mod_data.get("orden"),
+        )
+        db.add(db_modulo)
+        await db.flush()
+        for ud_data in unidades:
+            db.add(UnidadPlan(
+                modulo_id=db_modulo.id,
+                codigo=ud_data.get("codigo"),
+                nombre=ud_data.get("nombre"),
+                horas=ud_data.get("horas", 0),
+                creditos=ud_data.get("creditos", 0),
+                tipo=ud_data.get("tipo"),
+                orden=ud_data.get("orden"),
+            ))
+    return len(modulos)
+
 
 # Schemas Pydantic
 class PlanBase(BaseModel):
@@ -166,15 +201,19 @@ async def preview_plan_minedu(file: UploadFile = File(...)):
     Lee el archivo Excel y devuelve la estructura JSON sin guardar en la BD.
     Ideal para un 'Preview' en el Frontend.
     """
-    if not file.filename.endswith(('.xlsx', '.xls')):
+    nombre = (file.filename or "").lower()
+    if not nombre.endswith(('.xlsx', '.xls')):
         raise HTTPException(status_code=400, detail="Formato de archivo inválido. Debe ser Excel (.xlsx o .xls)")
-        
+
     contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="El archivo está vacío.")
+
     success, data, message = ExcelMineduParser.parse_plan_estudio(contents)
-    
+
     if not success:
         raise HTTPException(status_code=400, detail=message)
-        
+
     return {
         "message": "Plan estructurado exitosamente",
         "data": data
@@ -188,57 +227,50 @@ async def importar_plan_minedu(
     nombre: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db)
 ):
-    if not file.filename.endswith(('.xlsx', '.xls')):
+    nombre_archivo = (file.filename or "").lower()
+    if not nombre_archivo.endswith(('.xlsx', '.xls')):
         raise HTTPException(status_code=400, detail="Formato de archivo inválido. Debe ser Excel (.xlsx o .xls)")
-        
+
     contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="El archivo está vacío.")
+
     success, data, message = ExcelMineduParser.parse_plan_estudio(contents)
-    
+
     if not success:
         raise HTTPException(status_code=400, detail=message)
-        
-    # Si se especificó código o nombre explícito desde el frontend (edición previa), sobreescribir:
+
     if codigo and codigo.strip():
         data["codigo"] = codigo.strip()
     if nombre and nombre.strip():
         data["nombre"] = nombre.strip()
+    if not data.get("codigo") or not data.get("nombre"):
+        raise HTTPException(status_code=400, detail="El plan debe tener código CNOF y denominación válidos.")
 
-    # Verificar si el código ya existe
     result = await db.execute(select(PlanEstudio).where(PlanEstudio.codigo == data["codigo"]))
     existing_plan = result.scalar_one_or_none()
     valid_plan_fields = {"codigo", "nombre", "descripcion", "nivel_formativo", "creditos_totales", "horas_totales", "fecha_aprobacion", "resolucion_aprobacion", "estado"}
-    
+
     if existing_plan:
-        # Si ya existe un plan con este código, sincronizamos sus metadatos de forma idempotente
         for k in valid_plan_fields:
             if k in data and data[k] is not None:
                 setattr(existing_plan, k, data[k])
+        modulos_importados = await _reemplazar_modulos(db, existing_plan.id, data.get("modulos", []))
         await db.commit()
         await db.refresh(existing_plan)
         return {
             "message": "Plan de estudio existente sincronizado correctamente",
             "plan_id": existing_plan.id,
             "codigo": existing_plan.codigo,
-            "modulos_importados": len(data.get("modulos", []))
+            "modulos_importados": modulos_importados,
         }
 
-    # Crear el plan nuevo (solo campos válidos del modelo)
     plan_data = {k: v for k, v in data.items() if k in valid_plan_fields}
     db_plan = PlanEstudio(**plan_data)
     db.add(db_plan)
     await db.flush()
-    
-    # Crear módulos y unidades
-    for mod_data in data.get("modulos", []):
-        unidades_data = mod_data.pop("unidades", [])
-        db_modulo = ModuloPlan(**mod_data, plan_id=db_plan.id)
-        db.add(db_modulo)
-        await db.flush()
-        
-        for ud_data in unidades_data:
-            db_unidad = UnidadPlan(**ud_data, modulo_id=db_modulo.id)
-            db.add(db_unidad)
-            
+    modulos_importados = await _reemplazar_modulos(db, db_plan.id, data.get("modulos", []))
+
     # Registrar en Outbox
     request_id = request.headers.get("X-Request-ID", "unknown")
     event = OutboxEvent(
@@ -258,7 +290,7 @@ async def importar_plan_minedu(
         "message": "Plan importado exitosamente",
         "plan_id": db_plan.id,
         "codigo": db_plan.codigo,
-        "modulos_importados": len(data.get("modulos", []))
+        "modulos_importados": modulos_importados
     }
 
 @router.delete("/planes/{plan_id}")

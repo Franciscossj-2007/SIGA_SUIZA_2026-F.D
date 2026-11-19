@@ -30,7 +30,9 @@ export function PeriodManager({ onClose, onUpdate }) {
   };
 
   useEffect(() => {
-    fetchPeriods();
+    queueMicrotask(() => {
+      fetchPeriods();
+    });
   }, []);
 
   const handleCreate = async (e) => {

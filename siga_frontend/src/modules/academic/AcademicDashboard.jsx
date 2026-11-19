@@ -135,7 +135,9 @@ export function AcademicDashboard() {
   };
 
   useEffect(() => {
-    fetchData();
+    queueMicrotask(() => {
+      fetchData();
+    });
   }, []);
 
   // Helper: Categorize program by academic area
@@ -203,7 +205,7 @@ export function AcademicDashboard() {
 
   // Reset page when filter changes
   useEffect(() => {
-    setCurrentPage(1);
+    queueMicrotask(() => setCurrentPage(1));
   }, [searchTerm, filterEstado, filterModalidad, filterArea, viewMode]);
 
   // Reset catalog scroll to top when page changes
@@ -460,39 +462,31 @@ export function AcademicDashboard() {
       const codigoCarrera = (previewData.codigo || '').trim();
       const nombreCarrera = (previewData.nombre || '').trim();
 
-      if (!codigoCarrera || !nombreCarrera) {
-        const msg = 'La carrera debe contar con código (CNOF) y denominación válidos.';
+      const modulos = Array.isArray(previewData.modulos) ? previewData.modulos : [];
+      if (!codigoCarrera || !nombreCarrera || modulos.length === 0) {
+        const msg = 'La carrera debe contar con código (CNOF), denominación y módulos válidos.';
         setImportError(msg);
         toast.warning(msg, 'Campos requeridos');
         setIsProcessing(false);
         return;
       }
 
-      // 1. Sincronizar o registrar el Plan de Estudios en mod-planes-estudio
-      let planId = null;
-      try {
-        const formData = new FormData();
-        formData.append('file', importFile);
-        formData.append('codigo', codigoCarrera);
-        formData.append('nombre', nombreCarrera);
+      const formData = new FormData();
+      formData.append('file', importFile);
+      formData.append('codigo', codigoCarrera);
+      formData.append('nombre', nombreCarrera);
 
-        const token = localStorage.getItem('token');
-        const planRes = await fetch(`${apiClient.baseURL}/api/mod-planes-estudio/planes/importar-minedu`, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}` },
-          body: formData
-        });
-        
-        if (planRes.ok) {
-          const planData = await planRes.json();
-          planId = planData.plan_id || null;
-        } else {
-          const planErr = await planRes.json().catch(() => ({}));
-          console.warn('Advertencia secundaria en mod-planes-estudio:', planErr.detail);
-        }
-      } catch (errPlanes) {
-        console.warn('Error no bloqueante en mod-planes-estudio:', errPlanes);
+      const token = localStorage.getItem('token');
+      const planRes = await fetch(`${apiClient.baseURL}/api/mod-planes-estudio/planes/importar-minedu`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData
+      });
+      const planData = await planRes.json().catch(() => ({}));
+      if (!planRes.ok) {
+        throw new Error(planData.detail || 'No se pudo importar el plan de estudios.');
       }
+      const planId = planData.plan_id || null;
 
       // 2. Registrar el programa académico en mod-programas-estudio
       const programaData = {

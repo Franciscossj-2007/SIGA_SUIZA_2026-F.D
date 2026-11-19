@@ -29,8 +29,10 @@ export function ProtectedImage({ src, alt = '', className, fallback = null, lazy
 
   useEffect(() => {
     let cancelled = false;
-    setFailed(false);
-    setObjectUrl(null);
+    queueMicrotask(() => {
+      setFailed(false);
+      setObjectUrl(null);
+    });
 
     if (!src || !visible) return;
 

@@ -23,7 +23,16 @@ fi
 
 if [ "$SKIP_MIGRATIONS" != "true" ]; then
     echo "🔄 Ejecutando migraciones de base de datos..."
-    alembic upgrade head || echo "⚠️ Alembic upgrade head falló o fue omitido — continuando..."
+    intentos=0
+    until alembic upgrade head; do
+        intentos=$((intentos + 1))
+        if [ "$intentos" -ge 10 ]; then
+            echo "❌ Alembic upgrade head falló después de $intentos intentos — abortando."
+            exit 1
+        fi
+        echo "⏳ Base de datos no lista, reintentando ($intentos/10)..."
+        sleep 3
+    done
 fi
 
 export SIGA_MODULE_USUARIOS_URL="http://127.0.0.1:8001"

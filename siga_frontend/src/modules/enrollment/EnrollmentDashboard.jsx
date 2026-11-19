@@ -63,14 +63,16 @@ export function EnrollmentDashboard() {
   };
 
   useEffect(() => {
-    if (userRole !== 'invitado') {
-      if (userRole === 'secretaria_programa' && currentPrograma === 'ALL') {
-        const fallbackId = user?.email === 'secretaria_prog@siga.edu' ? '2' : '1';
-        setCurrentPrograma(user?.programa_id ? String(user.programa_id) : fallbackId);
-      } else {
-        fetchStudents();
+    queueMicrotask(() => {
+      if (userRole !== 'invitado') {
+        if (userRole === 'secretaria_programa' && currentPrograma === 'ALL') {
+          const fallbackId = user?.email === 'secretaria_prog@siga.edu' ? '2' : '1';
+          setCurrentPrograma(user?.programa_id ? String(user.programa_id) : fallbackId);
+        } else {
+          fetchStudents();
+        }
       }
-    }
+    });
     // Solo debe re-ejecutarse al cambiar de programa o rol (no en cada tecla del buscador).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPrograma, userRole]);

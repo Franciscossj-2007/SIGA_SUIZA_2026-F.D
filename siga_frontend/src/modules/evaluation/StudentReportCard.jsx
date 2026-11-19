@@ -31,6 +31,129 @@ const hashCorto = (texto) => {
   return h.toString(36).toUpperCase().padStart(7, '0').slice(0, 7);
 };
 
+const tituloCiclo = (numero) => {
+  const romanos = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
+  return romanos[numero - 1] ? `CICLO ${romanos[numero - 1]}` : `CICLO ${numero}`;
+};
+
+const estadoDeNota = (nota, estadoGuardado) => {
+  if (nota === null || nota === undefined) return estadoGuardado || 'no_cursado';
+  return nota >= NOTA_MIN_APROBAR ? 'aprobado' : 'desaprobado';
+};
+
+const unidadesDeBoletin = (lista) => (Array.isArray(lista) ? lista : []).map(u => ({
+  nombre: u.unidad_nombre || u.nombre,
+  creditos: u.creditos,
+  nota: u.nota_final ?? u.nota ?? null,
+  nota_c1: u.nota_c1 ?? null,
+  nota_c2: u.nota_c2 ?? null,
+  nota_c3: u.nota_c3 ?? null,
+  estado: u.estado || estadoDeNota(u.nota_final ?? u.nota),
+}));
+
+const notasPorCicloDesdeBoletin = (boletin) => {
+  const ciclos = Array.isArray(boletin?.ciclos) ? boletin.ciclos : [];
+  if (ciclos.length === 0) return null;
+  const porCiclo = new Map();
+  ciclos.forEach((ciclo, indice) => {
+    const numero = Number(ciclo.ciclo) || indice + 1;
+    const unidades = unidadesDeBoletin(ciclo.unidades);
+    porCiclo.set(numero, {
+      ciclo: numero,
+      titulo: ciclo.titulo || tituloCiclo(numero),
+      periodo_codigo: ciclo.periodo_codigo || boletin.estudiante?.periodo_codigo,
+      unidades,
+      completado: unidades.length > 0 && unidades.every(u => u.estado === 'aprobado'),
+    });
+  });
+  const cicloActual = Math.max(...porCiclo.keys());
+  const cursosPeriodo = unidadesDeBoletin(boletin.cursos_periodo);
+  return {
+    cicloActual,
+    porCiclo,
+    periodoActual: boletin.estudiante?.periodo_codigo || porCiclo.get(cicloActual).periodo_codigo,
+    unidadesPeriodoActual: cursosPeriodo.length > 0 ? cursosPeriodo : porCiclo.get(cicloActual).unidades,
+  };
+};
+
+const obtenerNotasPorCiclo = (estudianteId, studentExtra = null, boletin = null) => {
+  if (!boletin) return null;
+  if (estudianteId != null && boletin.estudiante?.id != null && Number(estudianteId) !== Number(boletin.estudiante.id)) return null;
+  const codigo = boletin.estudiante?.codigo_estudiante;
+  if (studentExtra?.codigo_estudiante && codigo && studentExtra.codigo_estudiante !== codigo) return null;
+  return notasPorCicloDesdeBoletin(boletin);
+};
+
+const resumenDesdeJson = (notasJson) => {
+  if (!notasJson) return null;
+  const unidades = notasJson.unidadesPeriodoActual || [];
+  const conNota = unidades.filter(u => u.nota != null);
+  const promedio = conNota.length > 0
+    ? Math.round(conNota.reduce((s, u) => s + u.nota, 0) / conNota.length)
+    : null;
+  return {
+    periodo_codigo: notasJson.periodoActual,
+    cursos_periodo: unidades.map(u => ({
+      unidad_nombre: u.nombre,
+      creditos: u.creditos,
+      nota_c1: u.nota_c1,
+      nota_c2: u.nota_c2,
+      nota_c3: u.nota_c3,
+      nota_final: u.nota,
+      promedio_curso: u.nota,
+      estado: u.estado,
+    })),
+    resumen: {
+      promedio_general: promedio,
+      cursos_aprobados: unidades.filter(u => u.estado === 'aprobado').length,
+      cursos_desaprobados: unidades.filter(u => u.estado === 'desaprobado').length,
+      total_cursos: unidades.length,
+    },
+  };
+};
+
+const generarBoletinDesdeJson = (estudianteId, studentExtra = null, boletin = null) => {
+  const notasJson = notasPorCicloDesdeBoletin(boletin);
+  if (!notasJson) return null;
+  const periodoActual = resumenDesdeJson(notasJson);
+  const estudiante = boletin?.estudiante || studentExtra;
+  if (!estudiante?.codigo_estudiante) return null;
+  const ciclos = Array.from(notasJson.porCiclo.values());
+  const creditosAprobados = ciclos.reduce(
+    (total, c) => total + c.unidades.filter(u => u.estado === 'aprobado').reduce((s, u) => s + (u.creditos || 0), 0), 0);
+  const creditosTotales = boletin?.progreso_creditos?.creditos_totales || 0;
+  return {
+    estudiante: {
+      ...estudiante,
+      periodo_codigo: notasJson.periodoActual,
+      fecha_emision: estudiante.fecha_emision || new Date().toLocaleDateString('es-PE'),
+    },
+    matricula_estado: boletin?.matricula_estado || {},
+    estado_academico: estudiante.estado_academico || boletin?.estado_academico || 'matriculado',
+    progreso_creditos: {
+      creditos_aprobados: creditosAprobados,
+      creditos_totales: creditosTotales,
+      porcentaje: creditosTotales > 0 ? Math.round((creditosAprobados / creditosTotales) * 100) : 0,
+    },
+    cursos_periodo: periodoActual.cursos_periodo,
+    ciclos,
+    resumen: { ...periodoActual.resumen, ...(boletin?.resumen || {}) },
+    historial: boletin?.historial || [],
+    observaciones: boletin?.observaciones || null,
+    _notasJson: notasJson,
+  };
+};
+
+const mockEvaluacion = {
+  evaluaciones: (boletin) => (boletin?.estudiante ? [{
+    codigo_estudiante: boletin.estudiante.codigo_estudiante,
+    periodo: boletin.estudiante.periodo_codigo,
+    progreso_creditos: boletin.progreso_creditos,
+    cursos_periodo: boletin.cursos_periodo,
+    resumen: boletin.resumen,
+  }] : []),
+};
+
 const TONE_BADGE = {
   emerald: 'bg-gradient-to-r from-emerald-400 to-teal-500 text-white border-emerald-500',
   blue: 'bg-gradient-to-r from-sky-400 to-blue-500 text-white border-blue-500',
@@ -312,6 +435,21 @@ function BoletinEmptyState() {
   );
 }
 
+function Membrete() {
+  return (
+    <div className="text-center mb-7">
+      <div className="flex items-center justify-center gap-2.5 mb-1">
+        <span className="text-2xl">🎓</span>
+        <h1 className="text-2xl md:text-3xl font-extrabold text-primary tracking-wide">SIGA</h1>
+      </div>
+      <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-[0.28em] mb-3">Sistema de Gestión Académica</p>
+      <div className="w-full h-px bg-gradient-to-r from-transparent via-primary/40 to-transparent mb-3"></div>
+      <h2 className="text-sm font-bold text-slate-700 uppercase tracking-[0.2em]">Boletín de Notas Oficial</h2>
+      <div className="w-16 h-0.5 bg-primary mx-auto mt-2.5"></div>
+      <p className="text-[10px] text-slate-400 mt-2">Conforme al Reglamento de Evaluación y Promoción del Estudiante</p>
+    </div>
+  );
+}
 
 export function StudentReportCard() {
   const { user, openPasswordModal } = useAuth();
@@ -363,29 +501,31 @@ export function StudentReportCard() {
   }, [isAdmin]);
 
   useEffect(() => {
-    if (searchTerm.length >= 3) {
-      const val = searchTerm.trim().toLowerCase();
-      const term = searchTerm.trim();
-      const filtered = allStudents.filter(s => {
-        const nombres = (s.nombres || '').toLowerCase();
-        const apellidos = (s.apellidos || '').toLowerCase();
-        const nombreCompleto = `${s.nombres || ''} ${s.apellidos || ''}`.trim().toLowerCase();
-        const nombreInverso = `${s.apellidos || ''} ${s.nombres || ''}`.trim().toLowerCase();
-        return (
-          (s.dni && s.dni.includes(term)) ||
-          (nombres && nombres.includes(val)) ||
-          (apellidos && apellidos.includes(val)) ||
-          (nombreCompleto && nombreCompleto.includes(val)) ||
-          (nombreInverso && nombreInverso.includes(val)) ||
-          (s.codigo_estudiante && s.codigo_estudiante.toLowerCase().includes(val))
-        );
-      });
-      setFilteredStudents(filtered);
-      setShowDropdown(true);
-    } else {
-      setFilteredStudents([]);
-      setShowDropdown(false);
-    }
+    queueMicrotask(() => {
+      if (searchTerm.length >= 3) {
+        const val = searchTerm.trim().toLowerCase();
+        const term = searchTerm.trim();
+        const filtered = allStudents.filter(s => {
+          const nombres = (s.nombres || '').toLowerCase();
+          const apellidos = (s.apellidos || '').toLowerCase();
+          const nombreCompleto = `${s.nombres || ''} ${s.apellidos || ''}`.trim().toLowerCase();
+          const nombreInverso = `${s.apellidos || ''} ${s.nombres || ''}`.trim().toLowerCase();
+          return (
+            (s.dni && s.dni.includes(term)) ||
+            (nombres && nombres.includes(val)) ||
+            (apellidos && apellidos.includes(val)) ||
+            (nombreCompleto && nombreCompleto.includes(val)) ||
+            (nombreInverso && nombreInverso.includes(val)) ||
+            (s.codigo_estudiante && s.codigo_estudiante.toLowerCase().includes(val))
+          );
+        });
+        setFilteredStudents(filtered);
+        setShowDropdown(true);
+      } else {
+        setFilteredStudents([]);
+        setShowDropdown(false);
+      }
+    });
   }, [searchTerm, allStudents]);
 
   useEffect(() => {
@@ -437,82 +577,72 @@ export function StudentReportCard() {
   const effectiveStudentId = isAdmin ? selectedStudentId : user?.id;
 
   useEffect(() => {
-    if (!effectiveStudentId) {
-      setLoading(false);
-      return;
-    }
-    const fetchBoletin = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        let real = null;
-        try {
-          const res = await fetch(
-            `${API_BASE}/api/mod-gestion-academica/estudiantes/${effectiveStudentId}/boletin`,
-            { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }
-          );
-          if (res.ok) {
-            real = await res.json();
-          }
-        } catch (err) {
-          console.warn('API /boletin no disponible o error:', err);
-        }
-
-        const notasJson = obtenerNotasPorCiclo(effectiveStudentId, selectedStudent);
-        if (notasJson) {
-          const periodoActual = resumenDesdeJson(notasJson);
-          if (real) {
-            setData({
-              ...real,
-              estudiante: { ...real.estudiante, periodo_codigo: notasJson.periodoActual },
-              cursos_periodo: periodoActual.cursos_periodo,
-              resumen: { ...real.resumen, ...periodoActual.resumen },
-              _notasJson: notasJson,
-            });
-          } else {
-            const boletinJson = generarBoletinDesdeJson(effectiveStudentId, selectedStudent);
-            if (boletinJson) {
-              setData(boletinJson);
-            } else {
-              throw new Error('No se pudo generar la información del boletín.');
-            }
-          }
-        } else if (real) {
-          const evaluacion = mockEvaluacion.evaluaciones.find(
-            e => e.codigo_estudiante === real.estudiante.codigo_estudiante
-              && e.periodo === real.estudiante.periodo_codigo
-          );
-          setData(evaluacion ? { ...real, ...evaluacion } : real);
-        } else {
-          throw new Error('No se encontró información del boletín para este estudiante.');
-        }
-      } catch (e) {
-        setError(e.message);
+    queueMicrotask(() => {
+      if (!effectiveStudentId) {
+        setLoading(false);
+        return;
       }
-      setLoading(false);
-    };
-    fetchBoletin();
+      const fetchBoletin = async () => {
+        setLoading(true);
+        setError(null);
+        try {
+          let real = null;
+          try {
+            const res = await fetch(
+              `${API_BASE}/api/mod-gestion-academica/estudiantes/${effectiveStudentId}/boletin`,
+              { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }
+            );
+            if (res.ok) {
+              real = await res.json();
+            }
+          } catch (err) {
+            console.warn('API /boletin no disponible o error:', err);
+          }
+
+          const notasJson = obtenerNotasPorCiclo(effectiveStudentId, selectedStudent, real);
+          if (notasJson) {
+            const periodoActual = resumenDesdeJson(notasJson);
+            if (real) {
+              setData({
+                ...real,
+                estudiante: { ...real.estudiante, periodo_codigo: notasJson.periodoActual },
+                cursos_periodo: periodoActual.cursos_periodo,
+                resumen: { ...real.resumen, ...periodoActual.resumen },
+                _notasJson: notasJson,
+              });
+            } else {
+              const boletinJson = generarBoletinDesdeJson(effectiveStudentId, selectedStudent, real);
+              if (boletinJson) {
+                setData(boletinJson);
+              } else {
+                throw new Error('No se pudo generar la información del boletín.');
+              }
+            }
+          } else if (real) {
+            const evaluacion = mockEvaluacion.evaluaciones(real).find(
+              e => e.codigo_estudiante === real.estudiante.codigo_estudiante
+                && e.periodo === real.estudiante.periodo_codigo
+            );
+            setData(evaluacion ? { ...real, ...evaluacion } : real);
+          } else {
+            throw new Error('No se encontró información del boletín para este estudiante.');
+          }
+        } catch (e) {
+          setError(e.message);
+        }
+        setLoading(false);
+      };
+      fetchBoletin();
+    });
   }, [effectiveStudentId, selectedStudent]);
 
   useEffect(() => {
-    setBusquedaCursos('');
-    setFiltroEstado('todos');
-    setOrdenCursos('nombre');
+    queueMicrotask(() => {
+      setBusquedaCursos('');
+      setFiltroEstado('todos');
+      setOrdenCursos('nombre');
+    });
   }, [data]);
-
-  const Membrete = () => (
-    <div className="text-center mb-7">
-      <div className="flex items-center justify-center gap-2.5 mb-1">
-        <span className="text-2xl">🎓</span>
-        <h1 className="text-2xl md:text-3xl font-extrabold text-primary tracking-wide">SIGA</h1>
-      </div>
-      <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-[0.28em] mb-3">Sistema de Gestión Académica</p>
-      <div className="w-full h-px bg-gradient-to-r from-transparent via-primary/40 to-transparent mb-3"></div>
-      <h2 className="text-sm font-bold text-slate-700 uppercase tracking-[0.2em]">Boletín de Notas Oficial</h2>
-      <div className="w-16 h-0.5 bg-primary mx-auto mt-2.5"></div>
-      <p className="text-[10px] text-slate-400 mt-2">Conforme al Reglamento de Evaluación y Promoción del Estudiante</p>
-    </div>
-  );
 
   if (loading) {
     return (

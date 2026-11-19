@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 import json
 import os
+import re
 import uvicorn
 from contextlib import asynccontextmanager
 from io import BytesIO
@@ -15,11 +16,27 @@ from sqlalchemy import delete
 
 from database import engine, Base, get_db
 from models import PostulanteAdmitido
+from programas_catalog import resolver_programa_id, normalizar_texto
 
 import sys
 sys.path.append("/app")
 
 is_published = False
+
+MAX_ARCHIVO_BYTES = 25 * 1024 * 1024
+CODIGOS_PRUEBA = {"439"}
+ALIAS_COLUMNAS = {
+    "dni": ("nro de documento", "numero de documento", "dni", "documento"),
+    "nombres": ("nombres", "nombre"),
+    "paterno": ("apellido paterno", "paterno"),
+    "materno": ("apellido materno", "materno"),
+    "programa": ("programa de estudios", "programa"),
+    "modalidad": ("modalidad",),
+    "email": ("correo", "email"),
+    "celular": ("celular",),
+    "fecha_nacimiento": ("fecha nacimiento",),
+    "codigo": ("codigo",),
+}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -123,151 +140,215 @@ async def root():
 
 def sanitize_row(row):
     result = {}
-    for k, v in row.items():
-        if pd.isna(v):
-            result[str(k)] = None
-        elif isinstance(v, pd.Timestamp):
-            result[str(k)] = v.isoformat()
+    for key, value in row.items():
+        if value is None or (not isinstance(value, str) and pd.isna(value)):
+            result[str(key)] = None
+        elif isinstance(value, pd.Timestamp):
+            result[str(key)] = value.isoformat()
+        elif hasattr(value, "item") and not isinstance(value, str):
+            result[str(key)] = value.item()
         else:
-            result[str(k)] = v
+            result[str(key)] = value
     return result
+
+
+def _normalizar_header(header):
+    return normalizar_texto(header).rstrip(":")
+
+
+def _resolver_columnas(df):
+    normalizadas = {_normalizar_header(columna): columna for columna in df.columns}
+    columnas = {}
+    for campo, alias in ALIAS_COLUMNAS.items():
+        for nombre in alias:
+            if nombre in normalizadas:
+                columnas[campo] = normalizadas[nombre]
+                break
+    faltantes = [campo for campo in ("dni", "nombres", "paterno", "materno", "programa") if campo not in columnas]
+    if faltantes:
+        raise ValueError(
+            "Faltan columnas obligatorias en el Excel de admisión: "
+            + ", ".join(faltantes)
+            + ". Columnas encontradas: "
+            + ", ".join(str(c) for c in df.columns)
+        )
+    return columnas
+
+
+def _valor(row, columnas, campo):
+    return row.get(columnas.get(campo)) if campo in columnas else None
+
+
+def _texto(valor):
+    if valor is None:
+        return ""
+    return str(valor).strip()
+
+
+def _dni(valor):
+    return re.sub(r"\D", "", _texto(valor))
+
+
+def _procesar_filas(df, columnas, modalidad_por_defecto, resumen, dnis_vistos):
+    admitidos = []
+    for numero, (_, fila) in enumerate(df.iterrows(), start=2):
+        row = sanitize_row(fila)
+        dni = _dni(_valor(row, columnas, "dni"))
+        codigo = _texto(_valor(row, columnas, "codigo")).replace(".0", "")
+        if not dni and not codigo:
+            continue
+        resumen["filas_leidas"] += 1
+
+        if codigo in CODIGOS_PRUEBA:
+            resumen["omitidas"] += 1
+            resumen["errores"].append(f"Fila {numero}: fila de prueba descartada (código {codigo}).")
+            continue
+        if not (5 <= len(dni) <= 12):
+            resumen["omitidas"] += 1
+            resumen["errores"].append(f"Fila {numero}: DNI inválido {dni!r}.")
+            continue
+        if dni in dnis_vistos:
+            resumen["omitidas"] += 1
+            resumen["errores"].append(f"Fila {numero}: DNI duplicado {dni}.")
+            continue
+
+        nombres = _texto(_valor(row, columnas, "nombres"))
+        apellidos = " ".join(filter(None, [
+            _texto(_valor(row, columnas, "paterno")),
+            _texto(_valor(row, columnas, "materno")),
+        ]))
+        if not nombres or not apellidos:
+            resumen["omitidas"] += 1
+            resumen["errores"].append(f"Fila {numero}: nombres o apellidos incompletos.")
+            continue
+
+        nombre_programa = _texto(_valor(row, columnas, "programa"))
+        programa_id = resolver_programa_id(nombre_programa)
+        if programa_id is None:
+            resumen["omitidas"] += 1
+            resumen["errores"].append(
+                f"Fila {numero}: programa no reconocido {nombre_programa!r}."
+            )
+            continue
+
+        dnis_vistos.add(dni)
+        celular = _dni(_valor(row, columnas, "celular"))
+        fecha = _valor(row, columnas, "fecha_nacimiento")
+        admitidos.append(PostulanteAdmitido(
+            dni=dni,
+            nombres=nombres,
+            apellidos=apellidos,
+            programa_nombre=nombre_programa,
+            modalidad_admision=_texto(_valor(row, columnas, "modalidad")) or modalidad_por_defecto,
+            email=_texto(_valor(row, columnas, "email")) or None,
+            celular=celular or None,
+            fecha_nacimiento=_texto(fecha) or None,
+            metadata_admision={**row, "programa_id": programa_id},
+        ))
+        resumen["por_programa"][programa_id] = resumen["por_programa"].get(programa_id, 0) + 1
+    return admitidos
+
 
 from starlette.concurrency import run_in_threadpool
 
+
 def parse_excel_sync(contents: bytes):
     excel_data = pd.ExcelFile(BytesIO(contents))
-    
-    sheet_names_lower = [s.lower().strip() for s in excel_data.sheet_names]
-    b_datos_idx = None
-    for i, name in enumerate(sheet_names_lower):
-        if name == 'b_datos':
-            b_datos_idx = i
-            break
-    
-    if b_datos_idx is None:
-        raise ValueError(f"El Excel debe contener una hoja 'B_Datos'. Hojas encontradas: {excel_data.sheet_names}")
-        
-    df_reg = pd.read_excel(excel_data, sheet_name='B_Datos')
-    if df_reg.shape[1] > 38:
-        df_reg = df_reg.iloc[:, :38]
-    
-    df_exo = pd.DataFrame()
-    if 'B_Datos_Exonerados' in excel_data.sheet_names or \
-       any(s.lower().strip() == 'b_datos_exonerados' for s in excel_data.sheet_names):
-        for i, s in enumerate(excel_data.sheet_names):
-            if s.lower().strip() == 'b_datos_exonerados':
-                df_exo = pd.read_excel(excel_data, sheet_name=i)
-                if df_exo.shape[1] > 40:
-                    df_exo = df_exo.iloc[:, :40]
-                break
-            
-    admitidos_list = []
-    
-    for _, row in df_reg.iterrows():
-        row_dict = sanitize_row(row)
-        if not row_dict.get('NRO DE DOCUMENTO'): continue
-        dni = str(row_dict.get('NRO DE DOCUMENTO', '')).replace('.0', '').strip()
-        admitidos_list.append(PostulanteAdmitido(
-            dni=dni,
-            nombres=str(row_dict.get('NOMBRES', '')).strip(),
-            apellidos=f"{row_dict.get('APELLIDO PATERNO', '')} {row_dict.get('APELLIDO MATERNO', '')}".strip(),
-            programa_nombre=str(row_dict.get('PROGRAMA DE   ESTUDIOS', '')).strip(),
-            modalidad_admision="ORDINARIO",
-            email=str(row_dict.get('CORREO:', '')).strip() if row_dict.get('CORREO:') else None,
-            celular=str(row_dict.get('CELULAR', '')).replace('.0', '').strip() if row_dict.get('CELULAR') else None,
-            fecha_nacimiento=str(row_dict.get('FECHA NACIMIENTO: ', '')).strip() if row_dict.get('FECHA NACIMIENTO: ') else None,
-            metadata_admision=row_dict
-        ))
-        
-    for _, row in df_exo.iterrows():
-        row_dict = sanitize_row(row)
-        if not row_dict.get('NRO DE DOCUMENTO'): continue
-        dni = str(row_dict.get('NRO DE DOCUMENTO', '')).replace('.0', '').strip()
-        modalidad = str(row_dict.get('MODALIDAD', 'EXONERADO')).strip()
-        admitidos_list.append(PostulanteAdmitido(
-            dni=dni,
-            nombres=str(row_dict.get('NOMBRES', '')).strip(),
-            apellidos=f"{row_dict.get('APELLIDO PATERNO', '')} {row_dict.get('APELLIDO MATERNO', '')}".strip(),
-            programa_nombre=str(row_dict.get('PROGRAMA DE   ESTUDIOS', '')).strip(),
-            modalidad_admision=modalidad,
-            email=str(row_dict.get('CORREO:', '')).strip() if row_dict.get('CORREO:') else None,
-            celular=str(row_dict.get('CELULAR', '')).replace('.0', '').strip() if row_dict.get('CELULAR') else None,
-            fecha_nacimiento=str(row_dict.get('FECHA NACIMIENTO: ', '')).strip() if row_dict.get('FECHA NACIMIENTO: ') else None,
-            metadata_admision=row_dict
-        ))
-        
-    return admitidos_list
+    nombres_normalizados = {normalizar_texto(s): s for s in excel_data.sheet_names}
+
+    hoja_reg = nombres_normalizados.get("b_datos")
+    if hoja_reg is None:
+        raise ValueError(
+            "El Excel debe contener una hoja 'B_Datos'. "
+            f"Hojas encontradas: {excel_data.sheet_names}"
+        )
+
+    df_reg = pd.read_excel(excel_data, sheet_name=hoja_reg)
+    columnas = _resolver_columnas(df_reg)
+    resumen = {"errores": [], "filas_leidas": 0, "omitidas": 0, "por_programa": {}}
+    dnis_vistos = set()
+    admitidos = _procesar_filas(df_reg, columnas, "ORDINARIO", resumen, dnis_vistos)
+
+    hoja_exo = nombres_normalizados.get("b_datos_exonerados")
+    if hoja_exo is not None:
+        df_exo = pd.read_excel(excel_data, sheet_name=hoja_exo)
+        columnas_exo = _resolver_columnas(df_exo)
+        admitidos.extend(_procesar_filas(df_exo, columnas_exo, "EXONERADO", resumen, dnis_vistos))
+
+    return admitidos, resumen
+
 
 @app.post("/upload")
 async def upload_excel(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+    nombre = (file.filename or "").lower()
+    if not nombre.endswith((".xlsx", ".xls")):
+        raise HTTPException(
+            status_code=400,
+            detail="El archivo debe ser un Excel (.xlsx o .xls) con las hojas 'B_Datos' y 'B_Datos_Exonerados'.",
+        )
+
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="El archivo está vacío.")
+    if len(contents) > MAX_ARCHIVO_BYTES:
+        raise HTTPException(status_code=400, detail="El archivo supera el tamaño máximo de 25 MB.")
+
     try:
-        contents = await file.read()
-        try:
-            admitidos_list = await run_in_threadpool(parse_excel_sync, contents)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-            
-        # Limpiar tabla e insertar
-        await db.execute(delete(PostulanteAdmitido))
-        db.add_all(admitidos_list)
-        await db.commit()
-        
-        global is_published
-        is_published = True
-        
-        return {"message": f"Se procesaron {len(admitidos_list)} estudiantes exitosamente. Resultados publicados."}
-        
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        admitidos_list, resumen = await run_in_threadpool(parse_excel_sync, contents)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"No se pudo procesar el Excel: {exc}")
+
+    if not admitidos_list:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "No se encontraron admitidos válidos en el archivo.",
+                **resumen,
+            },
+        )
+
+    await db.execute(delete(PostulanteAdmitido))
+    db.add_all(admitidos_list)
+    await db.commit()
+
+    global is_published
+    is_published = True
+
+    return {
+        "message": f"Se procesaron {len(admitidos_list)} admitidos válidos. Resultados publicados.",
+        "procesados": len(admitidos_list),
+        **resumen,
+    }
+
 
 @app.get("/admitidos")
 async def get_admitidos(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(PostulanteAdmitido))
     records = result.scalars().all()
-    
-    # Formateamos para el core
+
     formatted = []
-    
-    # Mapping simplificado para el programa_id temporal (el core deberia mapear, pero para MVP enviamos un fallback id)
-    # Mapeo exacto alineado con los IDs del frontend (1=Arquitectura/Sistemas, 2=Enfermeria, 4=Administracion, 5=Contabilidad, 6=Mecatronica)
-    program_mapping = {
-        "DESARROLLO DE SISTEMAS DE INFORMACIÓN": 1,
-        "ENFERMERÍA TÉCNICA": 2,
-        "GESTIÓN ADMINISTRATIVA": 4,
-        "ASISTENCIA ADMINISTRATIVA": 4,
-        "CONTABILIDAD": 5,
-        "MECATRÓNICA AUTOMOTRIZ": 6,
-        "ELECTRICIDAD INDUSTRIAL": 7,
-        "ADMINISTRACIÓN DE OPERACIONES TURÍSTICAS": 8,
-        "CONSTRUCCIÓN CIVIL": 9,
-        "PRODUCCIÓN AGROPECUARIA": 10,
-        "MANEJO FORESTAL": 11
-    }
-    
-    for r in records:
-        prog_name_upper = r.programa_nombre.upper()
-        # Fallback a 99 (Desconocido) en lugar de 1, para no mezclar con Sistemas
-        prog_id = 99
-        for k,v in program_mapping.items():
-            if k in prog_name_upper or prog_name_upper in k:
-                prog_id = v
-                break
-                
+    no_reconocidos = []
+    for record in records:
+        programa_id = resolver_programa_id(record.programa_nombre)
+        if programa_id is None:
+            no_reconocidos.append(record.programa_nombre)
         formatted.append({
-            "dni": r.dni,
-            "nombres": r.nombres,
-            "apellidos": r.apellidos,
-            "programa_id": prog_id, 
-            "celular": r.celular,
-            "email_personal": r.email,
-            "fecha_nacimiento": r.fecha_nacimiento,
-            "modalidad": r.modalidad_admision,
-            "metadata_completa": r.metadata_admision
+            "dni": record.dni,
+            "nombres": record.nombres,
+            "apellidos": record.apellidos,
+            "programa_id": programa_id,
+            "programa_nombre": record.programa_nombre,
+            "celular": record.celular,
+            "email_personal": record.email,
+            "fecha_nacimiento": record.fecha_nacimiento,
+            "modalidad": record.modalidad_admision,
+            "metadata_completa": record.metadata_admision,
         })
-        
-    return {"admitidos": formatted}
+
+    respuesta = {"admitidos": formatted}
+    if no_reconocidos:
+        respuesta["programas_no_reconocidos"] = sorted(set(no_reconocidos))
+    return respuesta
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8009)

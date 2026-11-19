@@ -18,7 +18,10 @@ if (-not (Test-Path $python)) {
 $env:DB_HOST     = "localhost"
 $env:DB_PORT     = "5432"
 $env:DB_USER     = "postgres"
-$env:DB_PASSWORD = "john.007"
+if (-not $env:DB_PASSWORD) {
+    Write-Host "ERROR: definí DB_PASSWORD en el entorno antes de arrancar." -ForegroundColor Red
+    exit 1
+}
 $env:DB_NAME     = "siga_core"
 $env:SKIP_MIGRATIONS = "true"
 

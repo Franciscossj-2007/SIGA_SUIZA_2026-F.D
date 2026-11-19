@@ -34,7 +34,9 @@ export function TiposAlumnosPanel() {
   };
 
   useEffect(() => {
-    cargar();
+    queueMicrotask(() => {
+      cargar();
+    });
   }, []);
 
   const estudiantes = data?.estudiantes || [];

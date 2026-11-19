@@ -46,7 +46,9 @@ class SIGAApiClient {
           try {
             const errorData = await response.json();
             errorMsg = errorData.detail || errorMsg;
-          } catch (_) {}
+          } catch {
+            errorMsg = 'Credenciales inválidas';
+          }
           throw new Error(errorMsg);
         }
         this.clearToken();

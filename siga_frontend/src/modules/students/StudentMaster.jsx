@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef, Fragment } from 'react';
+import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../../core/auth/useAuth';
 import { API_BASE } from '../../core/api/client';
 import { useToast } from '../../core/ui/ToastContext';
+import { PROGRAMAS, PROGRAMAS_OPTIONS, getProgramaLabel } from '../../core/catalog/programas';
 import techBg from '../../assets/tech-bg.jpg';
 import { EditStudentModal } from './EditStudentModal';
 import { StudentDetail } from './StudentDetail';
@@ -410,35 +411,7 @@ const createEmptyStudentForm = (programaId = '') => ({
   documentos_completos: true, fecha_limite_documentos: ''
 });
 
-const PROGRAMAS = [
-  { id: 'ALL', label: 'Todos los Programas' },
-  { id: '1', label: 'Administración de Operaciones Turísticas' },
-  { id: '2', label: 'Asistencia Administrativa' },
-  { id: '3', label: 'Contabilidad' },
-  { id: '4', label: 'Construcción Civil' },
-  { id: '5', label: 'Gestión Administrativa' },
-  { id: '6', label: 'Desarrollo de Sistemas de Información' },
-  { id: '7', label: 'Electricidad Industrial' },
-  { id: '8', label: 'Enfermería Técnica' },
-  { id: '9', label: 'Manejo Forestal' },
-  { id: '10', label: 'Mecatrónica Automotriz' },
-  { id: '11', label: 'Producción Agropecuaria' },
-];
-
-const PROGRAMAS_OPTIONS = [
-  { value: '', label: 'Seleccione una carrera...' },
-  ...PROGRAMAS.filter(programa => programa.id !== 'ALL').map(programa => ({
-    value: programa.id,
-    label: programa.label,
-  })),
-];
-
 const TIPOS_SANGRE = ['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-'];
-
-const getProgramaLabel = (programaId) => {
-  const programa = PROGRAMAS.find(item => item.id === String(programaId));
-  return programa ? programa.label : 'Sin carrera seleccionada';
-};
 
 const compareStudentsByCarrera = (a, b) => {
   const carreraA = a.programa_id ? getProgramaLabel(a.programa_id) : '';
@@ -543,6 +516,7 @@ export function StudentMaster() {
   const [showModal, setShowModal] = useState(false);
   const [editingStudent, setEditingStudent] = useState(null);
   const [wizardStep, setWizardStep] = useState(1);
+  const searchTermRef = useRef('');
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [currentPrograma, setCurrentPrograma] = useState('ALL');
   const [stepDir, setStepDir] = useState('forward');
@@ -616,39 +590,17 @@ export function StudentMaster() {
     }
   };
 
-  useEffect(() => {
-    if (userRole !== 'invitado') {
-      if (userRole === 'secretaria_programa' && currentPrograma === 'ALL') {
-        const fallbackId = user?.email === 'secretaria_prog@siga.edu' ? '2' : '1';
-        setCurrentPrograma(user?.programa_id ? String(user.programa_id) : fallbackId);
-      } else {
-        handleSearch(searchTerm);
-      }
-    }
-  }, [currentPrograma, userRole]);
-
-  useEffect(() => {
-    if (!showModal) return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const onKeyDown = (e) => { if (e.key === 'Escape') setShowModal(false); };
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [showModal]);
-
-  const handleSearch = async (val = '') => {
+  const handleSearch = useCallback(async (val = '', programa = currentPrograma) => {
     setSearchTerm(val);
+    searchTermRef.current = val;
     setCurrentPage(1);
     setLoading(true);
     setLoadError(null);
     try {
       let url = `${API_BASE}/api/mod-gestion-academica/estudiantes/`;
 
-      if (currentPrograma && currentPrograma !== 'ALL') {
-        url += `?programa_id=${currentPrograma}`;
+      if (programa && programa !== 'ALL') {
+        url += `?programa_id=${encodeURIComponent(programa)}`;
       }
 
       const res = await fetch(url, {
@@ -659,12 +611,13 @@ export function StudentMaster() {
         let detalle = `El servicio de estudiantes respondio ${res.status}.`;
         try {
           const cuerpo = await res.json();
-          detalle = cuerpo.detail || cuerpo.message || detalle;
-        } catch { /* cuerpo no-JSON */ }
+          detalle = cuerpo.detail || cuerpo.message || `El servicio de estudiantes respondio ${res.status}.`;
+        } catch {
+          detalle = `El servicio de estudiantes respondio ${res.status}.`;
+        }
         console.error('API Error:', detalle);
         setStudents([]);
         setLoadError(detalle);
-        setLoading(false);
         return;
       }
 
@@ -674,7 +627,6 @@ export function StudentMaster() {
         console.error('Respuesta degradada:', detalle);
         setStudents([]);
         setLoadError(detalle);
-        setLoading(false);
         return;
       }
 
@@ -703,9 +655,34 @@ export function StudentMaster() {
       console.error(e);
       setStudents([]);
       setLoadError('No se pudo conectar con el servidor. Verifique que el backend este levantado.');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  };
+  }, [currentPrograma]);
+
+  useEffect(() => {
+    if (userRole === 'invitado') return undefined;
+    if (userRole === 'secretaria_programa' && currentPrograma === 'ALL') {
+      const fallbackId = user?.email === 'secretaria_prog@siga.edu' ? '2' : '1';
+      const programaAsignado = user?.programa_id ? String(user.programa_id) : fallbackId;
+      queueMicrotask(() => setCurrentPrograma(programaAsignado));
+      return undefined;
+    }
+    queueMicrotask(() => { handleSearch(searchTermRef.current, currentPrograma); });
+    return undefined;
+  }, [currentPrograma, userRole, handleSearch, user?.email, user?.programa_id]);
+
+  useEffect(() => {
+    if (!showModal) return undefined;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e) => { if (e.key === 'Escape') setShowModal(false); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [showModal]);
 
   const handleFotoChange = (e) => {
     const file = e.target.files?.[0];

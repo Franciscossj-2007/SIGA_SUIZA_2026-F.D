@@ -2,14 +2,48 @@ import { useState } from 'react';
 import { API_BASE } from '../../core/api/client';
 import { GraduationCap, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
 
+const EXTENSION_EXCEL = /\.(xlsx|xls)$/i;
+const MAX_ARCHIVO = 25 * 1024 * 1024;
+
+const describirError = (detail) => {
+  if (typeof detail === 'string') return detail;
+  if (detail && typeof detail === 'object') {
+    const errores = [
+      detail.message,
+      ...(detail.errores || []),
+      ...(detail.errores_validacion || []),
+    ].filter(Boolean);
+    if (errores.length > 0) return errores.join(' ');
+  }
+  return 'Error al procesar el archivo.';
+};
+
 export function AdmissionModule() {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState({ text: '', type: '' });
 
   const handleFileChange = (e) => {
-    setFile(e.target.files[0]);
+    const seleccionado = e.target.files?.[0] || null;
+    setFile(null);
     setMessage({ text: '', type: '' });
+    if (!seleccionado) return;
+    if (!EXTENSION_EXCEL.test(seleccionado.name)) {
+      setMessage({ text: 'Formato inválido: selecciona un archivo Excel (.xlsx o .xls).', type: 'error' });
+      e.target.value = '';
+      return;
+    }
+    if (seleccionado.size === 0) {
+      setMessage({ text: 'El archivo está vacío.', type: 'error' });
+      e.target.value = '';
+      return;
+    }
+    if (seleccionado.size > MAX_ARCHIVO) {
+      setMessage({ text: 'El archivo supera el tamaño máximo de 25 MB.', type: 'error' });
+      e.target.value = '';
+      return;
+    }
+    setFile(seleccionado);
   };
 
   const handleProcess = async (e) => {
@@ -34,9 +68,18 @@ export function AdmissionModule() {
       const data = await res.json();
       
       if (res.ok) {
-        setMessage({ text: data.message || 'Archivo procesado con éxito.', type: 'success' });
+        const resumen = data.resumen || {};
+        const texto = [
+          data.message || 'Archivo procesado con éxito.',
+          `${data.procesados ?? 0} ingresantes registrados.`,
+          resumen.filas_leidas ? `Filas leídas: ${resumen.filas_leidas}.` : '',
+          Array.isArray(resumen.errores) && resumen.errores.length
+            ? `Errores: ${resumen.errores.length}.`
+            : '',
+        ].filter(Boolean).join(' ');
+        setMessage({ text: texto, type: 'success' });
       } else {
-        setMessage({ text: data.detail || 'Error al procesar el archivo.', type: 'error' });
+        setMessage({ text: describirError(data.detail), type: 'error' });
       }
     } catch (err) {
       console.error(err);
@@ -67,7 +110,7 @@ export function AdmissionModule() {
             <div className="border-2 border-dashed border-slate-300 rounded-xl p-8 bg-slate-50/50 hover:bg-slate-50 transition-colors">
               <input 
                 type="file" 
-                accept=".xlsx"
+                accept=".xlsx,.xls"
                 onChange={handleFileChange}
                 className="block w-full text-sm text-slate-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary-soft file:text-primary hover:file:bg-primary/20 transition-colors cursor-pointer"
                 required

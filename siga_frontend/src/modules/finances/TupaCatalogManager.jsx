@@ -47,7 +47,7 @@ export function TupaCatalogManager({ catalog, catalogError, onSaveConcept, onDel
   const [configForm, setConfigForm] = useState(cajaConfig);
   const [configStatus, setConfigStatus] = useState({ saving: false, message: '', error: '' });
 
-  useEffect(() => { setConfigForm(cajaConfig); }, [cajaConfig]);
+  useEffect(() => { queueMicrotask(() => setConfigForm(cajaConfig)); }, [cajaConfig]);
 
   const updateConfig = (field, value) => setConfigForm(prev => ({ ...prev, [field]: value }));
   const configDirty = JSON.stringify(configForm) !== JSON.stringify(cajaConfig);

@@ -33,9 +33,11 @@ export function TramitesDashboard() {
   };
 
   useEffect(() => {
-    if (activeTab === 'solicitudes') {
-      fetchSolicitudes();
-    }
+    queueMicrotask(() => {
+      if (activeTab === 'solicitudes') {
+        fetchSolicitudes();
+      }
+    });
   }, [activeTab]);
 
   const handleEstadoChange = async (id, newEstado) => {

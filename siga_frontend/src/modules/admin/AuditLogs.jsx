@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { API_BASE } from '../../core/api/client';
 import { FileText, RefreshCw, ChevronDown, ScrollText } from 'lucide-react';
 
@@ -10,7 +10,7 @@ export function AuditLogs() {
     event_type: ''
   });
 
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     setLoading(true);
     try {
       let url = `${API_BASE}/api/mod-auditoria/api/v1/auditoria?limit=50`;
@@ -27,11 +27,13 @@ export function AuditLogs() {
       console.error(e);
     }
     setLoading(false);
-  };
+  }, [filters]);
 
   useEffect(() => {
-    loadLogs();
-  }, [filters]);
+    queueMicrotask(() => {
+      loadLogs();
+    });
+  }, [loadLogs]);
 
   return (
     <div className="animate-fade-in flex flex-col space-y-6">

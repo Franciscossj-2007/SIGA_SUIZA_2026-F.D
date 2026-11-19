@@ -1,5 +1,5 @@
 /* eslint-disable react-hooks/set-state-in-effect */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { apiClient } from '../../core/api/client';
 import { useToast } from '../../core/ui/ToastContext';
 import { FileText, BookOpen, ExternalLink, Filter, AlertCircle, X } from 'lucide-react';
@@ -36,7 +36,7 @@ export function CoordinatorReview({ programId, periodId, docentes, cargaLectiva,
   const [obsModal, setObsModal] = useState(null);
   const [obsText, setObsText] = useState('');
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     if (!programId || !periodId) return;
     setLoading(true);
     try {
@@ -50,11 +50,11 @@ export function CoordinatorReview({ programId, periodId, docentes, cargaLectiva,
       console.error('Error fetching review data', e);
     }
     setLoading(false);
-  };
+  }, [programId, periodId]);
 
   useEffect(() => {
     fetchData();
-  }, [programId, periodId]);
+  }, [fetchData]);
 
   const handleUpdateStatus = async (type, id, status, customObs = '') => {
     if (status === 'observado' && !customObs) {

@@ -12,7 +12,7 @@ async function request(path, { method = 'GET', body } = {}) {
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  let data = null;
+  let data;
   try {
     data = await res.json();
   } catch {
@@ -116,8 +116,8 @@ export function isPublicUrl(url) {
   return host.includes('.');
 }
 
-// API base para la página pública: ruta relativa, servida por el proxy /api del propio frontend
-// (Vite en desarrollo, nginx en producción). Así el celular solo necesita llegar a la web del sistema.
+// API base para la página pública: en Vercel no existe el proxy /api de nginx,
+// por lo que se usa la URL del backend (VITE_API_URL) cuando está definida.
 export function publicApiBase() {
-  return '';
+  return import.meta.env.VITE_API_URL || '';
 }

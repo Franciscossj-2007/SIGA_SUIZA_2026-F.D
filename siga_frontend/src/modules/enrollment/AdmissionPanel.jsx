@@ -8,6 +8,33 @@ import { SectionInfoBlock } from './SectionInfoBlock';
 import { getDefaultPeriod, getPeriodLabel, getPeriodLabelById, isHistoricalPeriod, isFirstPeriodOfYear } from './periodUtils';
 import './enrollmentPremium.css';
 
+const EXTENSIONES_PERMITIDAS = /\.(xlsx|xls|json)$/i;
+const MAX_ARCHIVO = 25 * 1024 * 1024;
+
+const describirError = (detail) => {
+  if (typeof detail === 'string') return detail;
+  if (detail && typeof detail === 'object') {
+    const mensajes = [detail.message, ...(detail.errores || [])].filter(Boolean);
+    if (mensajes.length > 0) return mensajes.join(' ');
+  }
+  return 'Error al procesar el archivo.';
+};
+
+const Badge = ({ children, tone = 'slate' }) => {
+  const tones = {
+    green: 'bg-green-100 text-green-700 border-green-200',
+    red: 'bg-red-100 text-red-700 border-red-200',
+    amber: 'bg-amber-100 text-amber-700 border-amber-200',
+    sky: 'bg-sky-100 text-sky-700 border-sky-200',
+    slate: 'bg-slate-100 text-slate-600 border-slate-200',
+  };
+  return (
+    <span className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-bold border ${tones[tone]}`}>
+      {children}
+    </span>
+  );
+};
+
 /**
  * Sección 1 del diagrama — Admisión.
  *
@@ -92,7 +119,7 @@ export function AdmissionPanel() {
         }
       );
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+      if (!res.ok) throw new Error(describirError(data.detail || `Error ${res.status}`));
       if (dryRun) setPreview(data);
       else setResultado(data);
     } catch (e) {
@@ -114,21 +141,6 @@ export function AdmissionPanel() {
     } finally {
       setFichaLoading(null);
     }
-  };
-
-  const Badge = ({ children, tone = 'slate' }) => {
-    const tones = {
-      green: 'bg-green-100 text-green-700 border-green-200',
-      red: 'bg-red-100 text-red-700 border-red-200',
-      amber: 'bg-amber-100 text-amber-700 border-amber-200',
-      sky: 'bg-sky-100 text-sky-700 border-sky-200',
-      slate: 'bg-slate-100 text-slate-600 border-slate-200',
-    };
-    return (
-      <span className={`inline-block px-2.5 py-1 rounded-full text-[11px] font-bold border ${tones[tone]}`}>
-        {children}
-      </span>
-    );
   };
 
   return (
@@ -201,10 +213,28 @@ export function AdmissionPanel() {
             type="file"
             accept=".xlsx,.xls,.json"
             onChange={(e) => {
-              setFile(e.target.files[0] || null);
+              const seleccionado = e.target.files?.[0] || null;
+              setFile(null);
               setError('');
               setPreview(null);
               setResultado(null);
+              if (!seleccionado) return;
+              if (!EXTENSIONES_PERMITIDAS.test(seleccionado.name)) {
+                setError('Formato inválido: selecciona un archivo .xlsx, .xls o .json.');
+                e.target.value = '';
+                return;
+              }
+              if (seleccionado.size === 0) {
+                setError('El archivo está vacío.');
+                e.target.value = '';
+                return;
+              }
+              if (seleccionado.size > MAX_ARCHIVO) {
+                setError('El archivo supera el tamaño máximo de 25 MB.');
+                e.target.value = '';
+                return;
+              }
+              setFile(seleccionado);
             }}
             className="sma-file-input"
           />
@@ -259,6 +289,22 @@ export function AdmissionPanel() {
               <Badge tone="amber">Ya existen: {preview.existentes}</Badge>
             </div>
           </div>
+          {preview.advertencia && (
+            <div className="mb-4 p-3 rounded-xl bg-amber-50 text-amber-800 border border-amber-200 text-xs">
+              <AlertTriangle size={14} className="inline mr-2" />
+              {preview.advertencia}
+            </div>
+          )}
+          {preview.errores?.length > 0 && (
+            <details className="mb-4 text-sm">
+              <summary className="cursor-pointer font-semibold text-red-700">
+                Registros omitidos ({preview.errores.length})
+              </summary>
+              <ul className="mt-2 space-y-1 text-red-600 text-xs">
+                {preview.errores.map((mensaje, i) => <li key={i}>{mensaje}</li>)}
+              </ul>
+            </details>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -278,7 +324,9 @@ export function AdmissionPanel() {
                     <td className="py-2 pr-4 font-mono text-slate-700">{r.dni}</td>
                     <td className="py-2 pr-4 text-slate-700">{r.nombres}</td>
                     <td className="py-2 pr-4 text-slate-700">{r.apellidos}</td>
-                    <td className="py-2 pr-4 text-slate-500">{r.programa_id || programaId || '-'}</td>
+                    <td className="py-2 pr-4 text-slate-500">
+                      {programs.find(p => String(p.id) === String(r.programa_id || programaId))?.nombre || '-'}
+                    </td>
                     <td className="py-2 pr-4 text-slate-500">{r.celular || '-'}</td>
                     <td className="py-2 pr-4 text-slate-500">{r.email_personal || '-'}</td>
                     <td className="py-2">
@@ -312,6 +360,16 @@ export function AdmissionPanel() {
               </>
             )}
           </div>
+          {resultado.errores?.length > 0 && (
+            <details className="text-sm">
+              <summary className="cursor-pointer font-semibold text-red-700">
+                Registros omitidos ({resultado.errores.length})
+              </summary>
+              <ul className="mt-2 space-y-1 text-red-600 text-xs">
+                {resultado.errores.map((mensaje, i) => <li key={i}>{mensaje}</li>)}
+              </ul>
+            </details>
+          )}
 
           {resultado.matricula?.detalle?.length > 0 && (
             <div className="overflow-x-auto">

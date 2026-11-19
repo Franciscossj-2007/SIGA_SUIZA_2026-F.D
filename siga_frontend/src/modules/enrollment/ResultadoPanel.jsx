@@ -46,7 +46,9 @@ export function ResultadoPanel() {
   };
 
   useEffect(() => {
-    cargar();
+    queueMicrotask(() => {
+      cargar();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [soloPendientes]);
 

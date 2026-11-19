@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { tesoreriaApi } from './lib/tesoreriaApi';
+import { CAREERS_MAP } from '../../core/catalog/programas';
+
+export { CAREERS_MAP };
 
 // Tarifario TUPA, métodos de pago y reglas de cobro de Tesorería - IESTP Suiza 2026.
 // El catálogo y la configuración se guardan en la base de datos (mod-gestion-academica /tesoreria).
@@ -112,17 +115,3 @@ export const PAYMENT_METHODS = [
   { id: 'yape_plin', nombre: 'Billetera Digital (Yape / Plin)', icono: 'QrCode', descripcion: 'Transferencia móvil con comprobante digital' },
   { id: 'tarjeta_pos', nombre: 'Tarjeta POS (Débito/Crédito)', icono: 'CreditCard', descripcion: 'Pago con tarjeta Visa / Mastercard en módulo' }
 ];
-
-export const CAREERS_MAP = {
-  2: 'Enfermería Técnica',
-  3: 'Gestión Administrativa',
-  4: 'Asistencia Administrativa',
-  5: 'Contabilidad',
-  6: 'Mecatrónica Automotriz',
-  7: 'Electricidad Industrial',
-  8: 'Administración de Operaciones Turísticas',
-  9: 'Construcción Civil',
-  10: 'Producción Agropecuaria',
-  11: 'Manejo Forestal',
-  15: 'Desarrollo de Sistemas de Información'
-};

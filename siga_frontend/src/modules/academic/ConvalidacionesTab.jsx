@@ -42,7 +42,7 @@ export function ConvalidacionesTab() {
     }
   };
 
-  useEffect(() => { cargar(); }, []);
+  useEffect(() => { queueMicrotask(() => cargar()); }, []);
 
   // Unidades destino: malla del programa del estudiante elegido
   const programaId = estudiantes.find(e => String(e.id) === String(form.estudiante_id))?.programa_id;

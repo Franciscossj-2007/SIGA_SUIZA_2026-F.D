@@ -18,7 +18,7 @@ dist-ssr/
 
 # Secretos y entorno (usar .env.example como plantilla)
 .env
-.env.*
+.env*
 !.env.example
 
 # Temporales y logs
@@ -71,3 +71,5 @@ dump_railway.sql
 siga_core_inserts.sql
 dump_*.sql
 backups/
+
+.vercel/

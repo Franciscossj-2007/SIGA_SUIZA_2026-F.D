@@ -37,6 +37,7 @@ from domain import (
     es_periodo_inicio_anio,
 )
 from enrollment_engine import construir_propuesta, evaluar_ventana_matricula
+from programas_catalog import es_programa_valido, normalizar_texto, resolver_programa_id
 from enrollment_service import cargar_historial, construir_contexto
 from intermodule import fetch_cargaLectiva, fetch_malla, fetch_programa, fetch_periodo
 from models import (
@@ -116,15 +117,15 @@ _MAP_COLUMNAS = {
     "apellido_paterno": ["apellido paterno", "paterno", "primer apellido"],
     "apellido_materno": ["apellido materno", "materno", "segundo apellido"],
     "apellidos": ["apellidos"],
-    "programa_id": ["programa_id", "id_programa", "programa id"],
-    "celular": ["celular", "telefono", "teléfono", "celular:"],
-    "email_personal": ["email_personal", "correo", "correo:", "email"],
-    "modalidad": ["modalidad", "modalidad_admision", "modalidad de admisión"],
+    "programa_id": ["programa_id", "id_programa", "programa id", "programa de estudios", "programa"],
+    "celular": ["celular", "telefono", "celular:"],
+    "email_personal": ["email_personal", "correo", "email"],
+    "modalidad": ["modalidad", "modalidad_admision", "modalidad de admision"],
 }
 
 
 def _normaliza_header(header: str) -> str:
-    return str(header).strip().lower().replace("  ", " ")
+    return normalizar_texto(header).rstrip(":")
 
 
 def _resolver_columnas(df_columns):
@@ -132,10 +133,14 @@ def _resolver_columnas(df_columns):
     normalizadas = {_normaliza_header(c): c for c in df_columns}
     resuelto = {}
     for campo, alias in _MAP_COLUMNAS.items():
-        for a in alias:
-            if a in normalizadas:
-                resuelto[campo] = normalizadas[a]
+        for nombre in alias:
+            if nombre in normalizadas:
+                resuelto[campo] = normalizadas[nombre]
                 break
+    if "dni" not in resuelto:
+        raise ValueError(
+            "El Excel debe incluir una columna de DNI (p. ej. 'DNI' o 'NRO DE DOCUMENTO')."
+        )
     return resuelto
 
 
@@ -145,44 +150,68 @@ def _limpiar(valor):
     if isinstance(valor, float) and pd.isna(valor):
         return None
     texto = str(valor).strip()
-    if texto.lower() in ("", "nan", "none"):
+    if texto.lower() in ("", "nan", "none", "nat"):
         return None
-    return texto.replace(".0", "") if texto.endswith(".0") else texto
+    return texto[:-2] if texto.endswith(".0") else texto
 
 
-def parse_excel_ingresantes(contenido: bytes) -> List[dict]:
+def _digitos(valor):
+    texto = _limpiar(valor)
+    if texto is None:
+        return None
+    return "".join(caracter for caracter in texto if caracter.isdigit()) or None
+
+
+def _validar_registro(registro, numero, errores):
+    if not (5 <= len(registro["dni"]) <= 12):
+        errores.append(f"Fila {numero}: DNI inválido {registro['dni']!r}.")
+        return False
+    if not registro["nombres"] or not registro["apellidos"]:
+        errores.append(f"Fila {numero}: nombres y apellidos son obligatorios.")
+        return False
+    if registro["programa_id"] is not None:
+        programa_id = resolver_programa_id(registro["programa_id"])
+        if programa_id is None:
+            errores.append(
+                f"Fila {numero}: programa no reconocido {registro['programa_id']!r}."
+            )
+            return False
+        registro["programa_id"] = programa_id
+    return True
+
+
+def parse_excel_ingresantes(contenido: bytes) -> tuple[List[dict], List[str]]:
     excel = pd.ExcelFile(BytesIO(contenido))
     hoja = excel.sheet_names[0]
     df = pd.read_excel(excel, sheet_name=hoja)
     cols = _resolver_columnas(df.columns)
-    if "dni" not in cols:
-        raise ValueError(
-            "El Excel debe incluir una columna de DNI (p. ej. 'DNI' o 'NRO DE DOCUMENTO')."
-        )
 
     registros = []
-    for _, fila in df.iterrows():
-        dni = _limpiar(fila.get(cols["dni"]))
+    errores = []
+    for numero, (_, fila) in enumerate(df.iterrows(), start=2):
+        dni = _digitos(fila.get(cols["dni"]))
         if not dni:
             continue
-        apellidos = _limpiar(fila.get(cols.get("apellidos"))) if cols.get("apellidos") else None
+        apellidos = _limpiar(fila.get(cols["apellidos"])) if cols.get("apellidos") else None
         if not apellidos:
-            paterno = _limpiar(fila.get(cols.get("apellido_paterno"))) if cols.get("apellido_paterno") else ""
-            materno = _limpiar(fila.get(cols.get("apellido_materno"))) if cols.get("apellido_materno") else ""
-            apellidos = f"{paterno or ''} {materno or ''}".strip() or None
-        registros.append({
+            paterno = _limpiar(fila.get(cols.get("apellido_paterno"))) or ""
+            materno = _limpiar(fila.get(cols.get("apellido_materno"))) or ""
+            apellidos = f"{paterno} {materno}".strip() or None
+        registro = {
             "dni": dni,
-            "nombres": _limpiar(fila.get(cols.get("nombres"))) if cols.get("nombres") else "SIN NOMBRES",
-            "apellidos": apellidos or "SIN APELLIDOS",
-            "programa_id": _limpiar(fila.get(cols.get("programa_id"))) if cols.get("programa_id") else None,
-            "celular": _limpiar(fila.get(cols.get("celular"))) if cols.get("celular") else None,
-            "email_personal": _limpiar(fila.get(cols.get("email_personal"))) if cols.get("email_personal") else None,
-            "modalidad": (_limpiar(fila.get(cols.get("modalidad"))) if cols.get("modalidad") else None) or "ORDINARIO",
-        })
-    return registros
+            "nombres": _limpiar(fila.get(cols["nombres"])) if cols.get("nombres") else None,
+            "apellidos": apellidos,
+            "programa_id": _limpiar(fila.get(cols["programa_id"])) if cols.get("programa_id") else None,
+            "celular": _digitos(fila.get(cols["celular"])) if cols.get("celular") else None,
+            "email_personal": _limpiar(fila.get(cols["email_personal"])) if cols.get("email_personal") else None,
+            "modalidad": (_limpiar(fila.get(cols["modalidad"])) if cols.get("modalidad") else None) or "ORDINARIO",
+        }
+        if _validar_registro(registro, numero, errores):
+            registros.append(registro)
+    return registros, errores
 
 
-def parse_json_ingresantes(contenido: bytes) -> List[dict]:
+def parse_json_ingresantes(contenido: bytes) -> tuple[List[dict], List[str]]:
     """Parsea una relación de ingresantes en JSON (lista o ``{"admitidos": [...]}``)."""
     try:
         data = json.loads(contenido.decode("utf-8-sig"))
@@ -195,10 +224,11 @@ def parse_json_ingresantes(contenido: bytes) -> List[dict]:
         raise ValueError("El JSON debe ser una lista de ingresantes o un objeto con la clave 'admitidos'.")
 
     registros = []
-    for item in data:
+    errores = []
+    for numero, item in enumerate(data, start=1):
         if not isinstance(item, dict):
             continue
-        dni = _limpiar(item.get("dni") or item.get("nro de documento") or item.get("numero de documento"))
+        dni = _digitos(item.get("dni") or item.get("nro de documento") or item.get("numero de documento"))
         if not dni:
             continue
         apellidos = _limpiar(item.get("apellidos"))
@@ -207,16 +237,18 @@ def parse_json_ingresantes(contenido: bytes) -> List[dict]:
                 _limpiar(item.get("apellido_paterno") or item.get("paterno")),
                 _limpiar(item.get("apellido_materno") or item.get("materno")),
             ])).strip() or None
-        registros.append({
+        registro = {
             "dni": dni,
-            "nombres": _limpiar(item.get("nombres") or item.get("nombre")) or "SIN NOMBRES",
-            "apellidos": apellidos or "SIN APELLIDOS",
+            "nombres": _limpiar(item.get("nombres") or item.get("nombre")),
+            "apellidos": apellidos,
             "programa_id": _limpiar(item.get("programa_id") or item.get("id_programa")),
-            "celular": _limpiar(item.get("celular") or item.get("telefono")),
+            "celular": _digitos(item.get("celular") or item.get("telefono")),
             "email_personal": _limpiar(item.get("email_personal") or item.get("correo")),
             "modalidad": _limpiar(item.get("modalidad") or item.get("modalidad_admision")) or "ORDINARIO",
-        })
-    return registros
+        }
+        if _validar_registro(registro, numero, errores):
+            registros.append(registro)
+    return registros, errores
 
 
 class MatricularIngresantesRequest(BaseModel):
@@ -246,15 +278,24 @@ async def admision_excel(
         raise HTTPException(status_code=400, detail="El archivo debe ser .xlsx, .xls o .json")
     contenido = await file.read()
     try:
-        registros = (
+        registros, errores_validacion = (
             parse_json_ingresantes(contenido) if nombre.endswith(".json")
             else parse_excel_ingresantes(contenido)
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    if programa_id is not None and not es_programa_valido(programa_id):
+        raise HTTPException(status_code=400, detail="El programa seleccionado no es válido.")
+
     if not registros:
-        raise HTTPException(status_code=400, detail="No se encontraron ingresantes con DNI en el archivo.")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "No se encontraron ingresantes válidos con DNI en el archivo.",
+                "errores": errores_validacion,
+            },
+        )
 
     periodo_info = await fetch_periodo(periodo_id)
     codigo_periodo = periodo_info.get("codigo") if periodo_info else f"ID {periodo_id}"
@@ -286,6 +327,7 @@ async def admision_excel(
             "periodo_codigo": codigo_periodo,
             "es_periodo_inicio": es_inicio,
             "advertencia": advertencia,
+            "errores": errores_validacion,
         }
 
     creados, existentes = 0, 0
@@ -296,11 +338,12 @@ async def admision_excel(
             existentes += 1
             continue
         prog = reg["programa_id"] or programa_id
-        try:
-            prog_id = int(prog) if prog else None
-        except (TypeError, ValueError):
-            prog = str(prog).strip()
-            prog_id = int(prog) if prog.isdigit() else programa_id
+        prog_id = resolver_programa_id(prog)
+        if prog_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Ingresante con DNI {reg['dni']}: seleccione un programa de estudio válido (1..11).",
+            )
         codigo = f"{datetime.now().year}-{reg['dni']}"
         estudiante = Estudiante(
             codigo_estudiante=codigo,
@@ -353,6 +396,7 @@ async def admision_excel(
         "estudiante_ids": ids_creados,
         "matricula": matricula_resultado,
         "es_periodo_inicio": es_inicio,
+        "errores": errores_validacion,
     }
 
 

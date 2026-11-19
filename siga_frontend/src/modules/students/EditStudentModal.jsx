@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { API_BASE } from '../../core/api/client';
+import { getProgramaLabel } from '../../core/catalog/programas';
 import techBg from '../../assets/tech-bg.jpg';
 import { DEPARTAMENTOS, getProvincias, getDistritos } from './ubigeoPeru';
 import {
@@ -8,20 +9,6 @@ import {
   ShieldAlert, AlertTriangle, Lock, Check, ChevronDown,
   Building2, Activity, GraduationCap, HeartPulse, ShieldCheck
 } from 'lucide-react';
-
-const PROGRAMAS = {
-  1: 'Administración de Operaciones Turísticas',
-  2: 'Asistencia Administrativa',
-  3: 'Contabilidad',
-  4: 'Construcción Civil',
-  5: 'Gestión Administrativa',
-  6: 'Desarrollo de Sistemas de Información',
-  7: 'Electricidad Industrial',
-  8: 'Enfermería Técnica',
-  9: 'Manejo Forestal',
-  10: 'Mecatrónica Automotriz',
-  11: 'Producción Agropecuaria',
-};
 
 function SearchSelect({
   label,
@@ -268,27 +255,28 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
 
   useEffect(() => {
     if (student) {
-      const meta = student.metadata_admision || {};
-      setForm({
-        nombres: student.nombres || '',
-        apellidos: student.apellidos || '',
-        dni: student.dni || '',
-        fecha_nacimiento: student.fecha_nacimiento || '',
-        genero: meta.genero || meta.sexo || 'Masculino',
-        estado_civil: meta.estado_civil || 'Soltero',
-        nacionalidad: meta.nacionalidad || 'Peruana',
-        celular: student.celular || meta.telefono_movil || '',
-        email_personal: student.email_personal || '',
-        direccion_domicilio: student.direccion_domicilio || meta.direccion_residencia || '',
-        departamento: meta.departamento || meta.ubigeo?.departamento || '',
-        provincia: meta.provincia || meta.ubigeo?.provincia || '',
-        distrito: meta.distrito || meta.ubigeo?.distrito || '',
-        contacto_emergencia_nombre: meta.emergencia?.contacto_nombre || meta.apoderado?.nombre || meta.contacto_emergencia_nombre || '',
-        contacto_emergencia_telefono: meta.emergencia?.contacto_telefono || meta.apoderado?.celular || meta.contacto_emergencia_telefono || '',
+      queueMicrotask(() => {
+        const meta = student.metadata_admision || {};
+        setForm({
+          nombres: student.nombres || '',
+          apellidos: student.apellidos || '',
+          dni: student.dni || '',
+          fecha_nacimiento: student.fecha_nacimiento || '',
+          genero: meta.genero || meta.sexo || 'Masculino',
+          estado_civil: meta.estado_civil || 'Soltero',
+          nacionalidad: meta.nacionalidad || 'Peruana',
+          celular: student.celular || meta.telefono_movil || '',
+          email_personal: student.email_personal || '',
+          direccion_domicilio: student.direccion_domicilio || meta.direccion_residencia || '',
+          departamento: meta.departamento || meta.ubigeo?.departamento || '',
+          provincia: meta.provincia || meta.ubigeo?.provincia || '',
+          distrito: meta.distrito || meta.ubigeo?.distrito || '',
+          contacto_emergencia_nombre: meta.emergencia?.contacto_nombre || meta.apoderado?.nombre || meta.contacto_emergencia_nombre || '',
+          contacto_emergencia_telefono: meta.emergencia?.contacto_telefono || meta.apoderado?.celular || meta.contacto_emergencia_telefono || '',
+        });
+        setShowConfirmModal(false);
+        setError(null);
       });
-      setShowConfirmModal(false);
-      setError(null);
-
     }
   }, [student]);
 
@@ -399,7 +387,7 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
     }
   };
 
-  const carreraNombre = PROGRAMAS[student.programa_id] || (student.programa_id ? `Programa ${student.programa_id}` : 'Sin carrera');
+  const carreraNombre = student.programa_id ? getProgramaLabel(student.programa_id) : 'Sin carrera';
 
   return createPortal(
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">

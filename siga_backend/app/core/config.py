@@ -15,7 +15,7 @@ class CoreSettings(BaseSettings):
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432
     DB_USER: str = "postgres"
-    DB_PASSWORD: str = "dariana"
+    DB_PASSWORD: str = ""
     DB_NAME: str = "siga_suiza_2026"
     DATABASE_URL: Optional[str] = None
     
@@ -70,11 +70,11 @@ class CoreSettings(BaseSettings):
         if self.DATABASE_URL:
             url = self.DATABASE_URL
             if url.startswith("postgresql+asyncpg://"):
-                url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+                url = url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
             elif url.startswith("postgresql://"):
-                url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+                url = url.replace("postgresql://", "postgresql+psycopg://", 1)
             return url
-        return f"postgresql+psycopg2://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+        return f"postgresql+psycopg://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
     
     @property
     def redis_url_effective(self) -> str:

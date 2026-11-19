@@ -40,7 +40,9 @@ export function StaffManagement() {
   };
 
   useEffect(() => {
-    fetchStaff();
+    queueMicrotask(() => {
+      fetchStaff();
+    });
   }, []);
 
   

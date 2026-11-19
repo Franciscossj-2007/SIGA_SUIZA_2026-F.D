@@ -6,6 +6,15 @@ import math
 
 logger = logging.getLogger(__name__)
 
+
+def _entero(valor, defecto=0):
+    if valor is None or (not isinstance(valor, str) and pd.isna(valor)):
+        return defecto
+    try:
+        return int(float(str(valor).strip()))
+    except (TypeError, ValueError):
+        return defecto
+
 class ExcelMineduParser:
     """
     Motor de Extracción Semántica (Anchor-Based) para Planes de Estudio MINEDU.
@@ -112,16 +121,16 @@ class ExcelMineduParser:
 
                 # 5. Horas y Créditos
                 horas = ExcelMineduParser._find_anchor_value(df_gen, ["n°. horas", "no. horas", "n° horas", "horas"])
-                if horas: 
-                    try: plan_data["horas_totales"] = int(float(str(horas).strip()))
-                    except: pass
+                if horas:
+                    plan_data["horas_totales"] = _entero(horas)
                 creditos = ExcelMineduParser._find_anchor_value(df_gen, ["n° créditos", "no créditos", "n° creditos", "crédito", "credito"])
                 if creditos:
-                    try: plan_data["creditos_totales"] = int(float(str(creditos).strip()))
-                    except: pass
+                    plan_data["creditos_totales"] = _entero(creditos)
 
-            if not plan_data["codigo"]: plan_data["codigo"] = "TMP-" + str(pd.Timestamp.now().timestamp()).replace(".","")[-6:]
-            if not plan_data["nombre"]: plan_data["nombre"] = "Plan Extraído (Autogenerado)"
+            if not plan_data["codigo"]:
+                return False, {}, "No se pudo extraer el código CNOF del plan. Verifique que el archivo tenga el campo 'CÓDIGO *' en la hoja de organización modular."
+            if not plan_data["nombre"]:
+                return False, {}, "No se pudo extraer la denominación del programa de estudios."
 
             modulo_sheets = [n for n in sheet_names if (n.startswith("M") and n[1:].isdigit()) or ("módulo" in n.lower() or "modulo" in n.lower())]
             
@@ -187,14 +196,10 @@ class ExcelMineduParser:
                             if any(efsrt_kw in ud_name_str.lower() for efsrt_kw in ["efsrt", "experiencias formativas"]): 
                                 continue
                             
-                            hrs, creds = 0, 0
-                            if hr_col is not None and pd.notna(df_mod.iloc[idx, hr_col]):
-                                try: hrs = int(float(str(df_mod.iloc[idx, hr_col]).strip()))
-                                except: pass
-                            if cr_col is not None and pd.notna(df_mod.iloc[idx, cr_col]):
-                                try: creds = int(float(str(df_mod.iloc[idx, cr_col]).strip()))
-                                except: pass
-                                    
+                            hrs = _entero(df_mod.iloc[idx, hr_col]) if hr_col is not None else 0
+                            creds = _entero(df_mod.iloc[idx, cr_col]) if cr_col is not None else 0
+
+
                             if not periodo_for_row:
                                 periodo_for_row = (orden_modulo_idx - 1) * 2 + 1
                                 
@@ -256,11 +261,16 @@ class ExcelMineduParser:
                 plan_data["creditos_totales"] = sum(m["creditos"] for m in modulos_list)
             if plan_data["horas_totales"] == 0 and modulos_list:
                 plan_data["horas_totales"] = sum(m["horas"] for m in modulos_list)
-                
+
+            if not modulos_list or not any(modulo["unidades"] for modulo in modulos_list):
+                return False, {}, "No se encontraron unidades didácticas en las hojas de módulos (M1..M6)."
+            if plan_data["creditos_totales"] <= 0:
+                return False, {}, "El plan no registra créditos. Verifique la hoja de organización modular."
+
             return True, plan_data, "Archivo procesado y estructurado exitosamente"
 
         except Exception as e:
             logger.error(f"Error parseando Excel MINEDU: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            return False, {}, f"Error al procesar el archivo Excel: {str(e)}"
+            return False, {}, f"Error al procesar el archivo Excel: {type(e).__name__}: {e}"

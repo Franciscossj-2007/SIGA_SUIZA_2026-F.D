@@ -51,7 +51,7 @@ export function BecasTab() {
     }
   };
 
-  useEffect(() => { cargar(); }, []);
+  useEffect(() => { queueMicrotask(() => cargar()); }, []);
 
   const guardar = async (e) => {
     e.preventDefault();

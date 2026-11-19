@@ -6,6 +6,7 @@ from sqlalchemy.orm import selectinload
 from database import get_db, OutboxEvent
 from models import Estudiante, Matricula, MatriculaDetalle
 from schemas import EstudianteCreate, EstudianteResponse, EstudianteUpdate, MatriculaCreate, MatriculaResponse, IngestaMasivaRequest
+from programas_catalog import es_programa_valido
 from datetime import datetime
 from typing import List, Optional
 from pathlib import Path
@@ -116,8 +117,13 @@ async def ingesta_admitidos(request: Request, data: IngestaMasivaRequest, db: As
     Crea los expedientes de estudiantes y dispara eventos para integrarlos al ecosistema (crear usuarios, matricular, etc).
     """
     estudiantes_creados = 0
-    
+
     for admitido in data.admitidos:
+        if not es_programa_valido(admitido.programa_id):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Programa no reconocido para el DNI {admitido.dni}: {admitido.programa_id}. Debe ser uno de los 11 programas oficiales.",
+            )
         # 1. Capa Anticorrupción: Validar si ya existe
         existing = await db.execute(select(Estudiante).where(Estudiante.dni == admitido.dni))
         if existing.scalar_one_or_none():
@@ -170,6 +176,8 @@ async def ingesta_admitidos(request: Request, data: IngestaMasivaRequest, db: As
 
 @router.post("/estudiantes/", response_model=EstudianteResponse, status_code=status.HTTP_201_CREATED)
 async def crear_estudiante(request: Request, data: EstudianteCreate, db: AsyncSession = Depends(get_db)):
+    if data.programa_id is not None and not es_programa_valido(data.programa_id):
+        raise HTTPException(status_code=400, detail="El programa de estudio no es válido. Debe ser uno de los 11 programas oficiales.")
     existing = await db.execute(select(Estudiante).where(
         or_(Estudiante.dni == data.dni, Estudiante.codigo_estudiante == data.codigo_estudiante)
     ))
@@ -203,6 +211,8 @@ async def crear_estudiante(request: Request, data: EstudianteCreate, db: AsyncSe
 async def obtener_estudiantes(programa_id: Optional[int] = None, db: AsyncSession = Depends(get_db)):
     import traceback
     try:
+        if programa_id is not None and not es_programa_valido(programa_id):
+            raise HTTPException(status_code=400, detail="El programa de estudio no es válido. Debe ser uno de los 11 programas oficiales.")
         query = select(Estudiante).order_by(Estudiante.apellidos)
         if programa_id is not None:
             query = query.where(Estudiante.programa_id == programa_id)
@@ -232,10 +242,12 @@ async def obtener_estudiantes(programa_id: Optional[int] = None, db: AsyncSessio
             }
             for r in rows
         ]
+    except HTTPException:
+        raise
     except Exception as e:
         tb = traceback.format_exc()
         print(f"[ERROR] obtener_estudiantes: {e}\n{tb}")
-        return {"error": str(e), "type": type(e).__name__, "traceback": tb}
+        raise HTTPException(status_code=500, detail="No se pudo obtener la lista de estudiantes.")
 
 @router.get("/estudiantes/siguiente-codigo")
 async def obtener_siguiente_codigo(db: AsyncSession = Depends(get_db)):

@@ -1,5 +1,5 @@
 /* eslint-disable react-hooks/set-state-in-effect */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { apiClient } from '../../core/api/client';
 import { useToast } from '../../core/ui/ToastContext';
 
@@ -52,7 +52,7 @@ export function CoordinatorTutorias({ programId, periodId, docentes }) {
 
   const [form, setForm] = useState({ ciclo: '', docente_id: '', observaciones: '' });
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     if (!programId || !periodId) return;
     setLoading(true);
     try {
@@ -62,11 +62,11 @@ export function CoordinatorTutorias({ programId, periodId, docentes }) {
       console.error('Error fetching tutorias', e);
     }
     setLoading(false);
-  };
+  }, [programId, periodId]);
 
   useEffect(() => {
     fetchData();
-  }, [programId, periodId]);
+  }, [fetchData]);
 
   const handleAssign = async (e) => {
     e.preventDefault();

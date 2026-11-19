@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { apiClient } from '../../core/api/client';
 import { useToast } from '../../core/ui/ToastContext';
@@ -35,7 +35,7 @@ export function CurriculumMesh({ programId, onBack }) {
     setShowAddModule(true);
   };
 
-  const fetchMalla = async () => {
+  const fetchMalla = useCallback(async () => {
     setLoading(true);
     try {
       const [mallaRes, programRes] = await Promise.all([
@@ -49,12 +49,14 @@ export function CurriculumMesh({ programId, onBack }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [programId]);
 
   useEffect(() => {
-    window.scrollTo(0, 0);
-    fetchMalla();
-  }, [programId]);
+    queueMicrotask(() => {
+      window.scrollTo(0, 0);
+      fetchMalla();
+    });
+  }, [fetchMalla]);
 
   useEffect(() => {
     if (!showAddModule) return;
