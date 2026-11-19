@@ -15,6 +15,12 @@ def _entero(valor, defecto=0):
     except (TypeError, ValueError):
         return defecto
 
+
+def _limitar_texto(valor, limite=255):
+    if valor is None:
+        return valor
+    return str(valor).strip()[:limite]
+
 class ExcelMineduParser:
     """
     Motor de Extracción Semántica (Anchor-Based) para Planes de Estudio MINEDU.
@@ -98,7 +104,7 @@ class ExcelMineduParser:
                         exclude_keywords=["modular", "instituto", "institución", "institucion"]
                     )
                 if codigo_carrera:
-                    plan_data["codigo"] = str(codigo_carrera).strip()
+                    plan_data["codigo"] = _limitar_texto(codigo_carrera)
                 
                 # 2. Extraer código modular del instituto (informativo)
                 cod_mod = ExcelMineduParser._find_anchor_value(df_gen, ["código modular", "codigo modular"])
@@ -112,7 +118,7 @@ class ExcelMineduParser:
                     exclude_keywords=["institución", "institucion"]
                 )
                 if nombre:
-                    plan_data["nombre"] = str(nombre).strip()
+                    plan_data["nombre"] = _limitar_texto(nombre)
                 
                 # 4. Nivel formativo
                 nivel = ExcelMineduParser._find_anchor_value(df_gen, ["nivel formativo", "nivel"])
@@ -188,7 +194,7 @@ class ExcelMineduParser:
                             
                             ud_name_raw = df_mod.iloc[idx, ud_col]
                             if pd.isna(ud_name_raw) or str(ud_name_raw).strip() in ["", "0"]: continue
-                            ud_name_str = str(ud_name_raw).strip()
+                            ud_name_str = _limitar_texto(ud_name_raw)
                             if ud_name_str.lower() in ["unidad didáctica", "unidad didactica"]: continue
                             if any(stop in ud_name_str.lower() for stop in ["total", "sumatoria"]): break
                             
@@ -206,7 +212,7 @@ class ExcelMineduParser:
                             if periodo_for_row not in modulos_procesados_dict:
                                 modulos_procesados_dict[periodo_for_row] = {
                                     "codigo": f"MOD-C{periodo_for_row:02d}",
-                                    "nombre": f"{str(nombre_mod).strip()} - Ciclo {periodo_for_row}",
+                                    "nombre": _limitar_texto(f"{str(nombre_mod).strip()} - Ciclo {periodo_for_row}"),
                                     "horas": 0,
                                     "creditos": 0,
                                     "orden": periodo_for_row,

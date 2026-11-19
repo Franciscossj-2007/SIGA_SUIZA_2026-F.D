@@ -26,6 +26,12 @@ def _normalizar_nombre_programa(valor: str) -> str:
     )
 
 
+def _limitar_texto(valor, limite=255):
+    if valor is None:
+        return valor
+    return str(valor).strip()[:limite]
+
+
 # Schemas Pydantic
 class ProgramaBase(BaseModel):
     nombre: str
@@ -142,8 +148,8 @@ async def sincronizar_programa_plan(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    nombre = (payload.nombre or "").strip()
-    codigo = (payload.codigo or "").strip().upper()
+    nombre = _limitar_texto(payload.nombre or "")
+    codigo = _limitar_texto(payload.codigo or "").upper()
     if not nombre or not codigo:
         raise HTTPException(status_code=400, detail="El plan debe tener código y nombre válidos.")
     if not payload.modulos:
@@ -198,7 +204,7 @@ async def sincronizar_programa_plan(
     for modulo in payload.modulos:
         db_modulo = ProgramaModulo(
             programa_id=programa.id,
-            nombre=modulo.nombre,
+            nombre=_limitar_texto(modulo.nombre),
             periodo=modulo.periodo,
             horas_totales=modulo.horas_totales,
             creditos=modulo.creditos,
@@ -209,7 +215,7 @@ async def sincronizar_programa_plan(
         for unidad in modulo.unidades:
             db.add(ProgramaUnidad(
                 programa_modulo_id=db_modulo.id,
-                nombre=unidad.nombre,
+                nombre=_limitar_texto(unidad.nombre),
                 horas_teoria=unidad.horas_teoria,
                 horas_practica=unidad.horas_practica,
                 creditos=unidad.creditos,

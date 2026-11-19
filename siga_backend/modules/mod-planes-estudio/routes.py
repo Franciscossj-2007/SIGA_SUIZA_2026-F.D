@@ -11,6 +11,12 @@ from excel_parser import ExcelMineduParser
 router = APIRouter()
 
 
+def _limitar_texto(valor, limite=255):
+    if valor is None:
+        return valor
+    return str(valor).strip()[:limite]
+
+
 async def _reemplazar_modulos(db: AsyncSession, plan_id: int, modulos: List[dict]) -> int:
     existentes = (await db.execute(
         select(ModuloPlan).where(ModuloPlan.plan_id == plan_id)
@@ -24,8 +30,8 @@ async def _reemplazar_modulos(db: AsyncSession, plan_id: int, modulos: List[dict
         unidades = list(mod_data.get("unidades") or [])
         db_modulo = ModuloPlan(
             plan_id=plan_id,
-            codigo=mod_data.get("codigo"),
-            nombre=mod_data.get("nombre"),
+            codigo=_limitar_texto(mod_data.get("codigo")),
+            nombre=_limitar_texto(mod_data.get("nombre")),
             horas=mod_data.get("horas", 0),
             creditos=mod_data.get("creditos", 0),
             orden=mod_data.get("orden"),
@@ -35,8 +41,8 @@ async def _reemplazar_modulos(db: AsyncSession, plan_id: int, modulos: List[dict
         for ud_data in unidades:
             db.add(UnidadPlan(
                 modulo_id=db_modulo.id,
-                codigo=ud_data.get("codigo"),
-                nombre=ud_data.get("nombre"),
+                codigo=_limitar_texto(ud_data.get("codigo")),
+                nombre=_limitar_texto(ud_data.get("nombre")),
                 horas=ud_data.get("horas", 0),
                 creditos=ud_data.get("creditos", 0),
                 tipo=ud_data.get("tipo"),
