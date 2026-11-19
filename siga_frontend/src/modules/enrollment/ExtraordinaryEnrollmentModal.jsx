@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { apiClient, API_BASE } from '../../core/api/client';
 
 export default function ExtraordinaryEnrollmentModal({ isOpen, onClose, onSuccess, currentPrograma, userRole }) {
@@ -55,8 +56,8 @@ export default function ExtraordinaryEnrollmentModal({ isOpen, onClose, onSucces
     }
   };
 
-  return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4">
+  return createPortal(
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-start justify-center overflow-y-auto p-4 pt-10 sm:pt-16">
       <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-slide-up border border-white/20">
         <div className="bg-gradient-to-r from-indigo-600 to-violet-600 px-8 py-6 flex justify-between items-center relative overflow-hidden">
           <div className="absolute -right-6 -top-6 w-24 h-24 bg-white/10 rounded-full blur-xl"></div>
@@ -195,6 +196,7 @@ export default function ExtraordinaryEnrollmentModal({ isOpen, onClose, onSucces
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -15,6 +15,17 @@ from schemas import (
 
 router = APIRouter()
 
+
+def _normalizar_nombre_programa(valor: str) -> str:
+    import unicodedata
+    if not valor:
+        return ""
+    return "".join(
+        caracter for caracter in unicodedata.normalize("NFD", valor.strip().lower())
+        if unicodedata.category(caracter) != "Mn"
+    )
+
+
 # Schemas Pydantic
 class ProgramaBase(BaseModel):
     nombre: str
@@ -34,6 +45,33 @@ class ProgramaResponse(ProgramaBase):
     created_at: datetime
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+
+class UnidadPlanImport(BaseModel):
+    nombre: str
+    horas_teoria: int = 0
+    horas_practica: int = 0
+    creditos: int = 0
+    orden: int = 1
+
+
+class ModuloPlanImport(BaseModel):
+    nombre: str
+    periodo: int
+    horas_totales: int = 0
+    creditos: int = 0
+    orden: int
+    unidades: List[UnidadPlanImport] = []
+
+
+class ProgramaPlanImport(BaseModel):
+    nombre: str
+    codigo: str
+    descripcion: Optional[str] = None
+    creditos_totales: int = 0
+    duracion_periodos: int = 6
+    plan_estudio_id: Optional[int] = None
+    modulos: List[ModuloPlanImport] = []
 
 # Schemas Periodo Academico
 class PeriodoBase(BaseModel):
@@ -68,20 +106,14 @@ async def health_check():
 # Endpoints CRUD
 @router.post("/programas", response_model=ProgramaResponse, status_code=status.HTTP_201_CREATED)
 async def crear_programa(programa: ProgramaCreate, request: Request, db: AsyncSession = Depends(get_db)):
-    import unicodedata
-    def normalize_str(s: str) -> str:
-        if not s:
-            return ""
-        return "".join(c for c in unicodedata.normalize("NFD", s.strip().lower()) if unicodedata.category(c) != "Mn")
-
     codigo_norm = programa.codigo.strip().upper()
-    nombre_norm = normalize_str(programa.nombre)
+    nombre_norm = _normalizar_nombre_programa(programa.nombre)
 
     all_existentes = (await db.execute(select(ProgramaEstudio))).scalars().all()
     for p in all_existentes:
         if p.codigo and p.codigo.strip().upper() == codigo_norm:
             raise HTTPException(status_code=400, detail=f"Ya existe un programa de estudio con el código '{programa.codigo}'")
-        if normalize_str(p.nombre) == nombre_norm:
+        if _normalizar_nombre_programa(p.nombre) == nombre_norm:
             raise HTTPException(status_code=400, detail=f"El programa de estudio '{programa.nombre}' ya existe en el catálogo institucional")
 
     db_programa = ProgramaEstudio(**programa.model_dump())
@@ -102,6 +134,110 @@ async def crear_programa(programa: ProgramaCreate, request: Request, db: AsyncSe
     await db.commit()
     await db.refresh(db_programa)
     return db_programa
+
+
+@router.post("/programas/sincronizar-plan")
+async def sincronizar_programa_plan(
+    payload: ProgramaPlanImport,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    nombre = (payload.nombre or "").strip()
+    codigo = (payload.codigo or "").strip().upper()
+    if not nombre or not codigo:
+        raise HTTPException(status_code=400, detail="El plan debe tener código y nombre válidos.")
+    if not payload.modulos:
+        raise HTTPException(status_code=400, detail="El plan debe incluir al menos un módulo.")
+
+    existentes = (await db.execute(select(ProgramaEstudio))).scalars().all()
+    por_codigo = next(
+        (p for p in existentes if p.codigo and p.codigo.strip().upper() == codigo),
+        None,
+    )
+    por_nombre = next(
+        (p for p in existentes if _normalizar_nombre_programa(p.nombre) == _normalizar_nombre_programa(nombre)),
+        None,
+    )
+    programa = por_codigo or por_nombre
+    creado = programa is None
+
+    if creado:
+        programa = ProgramaEstudio(
+            nombre=nombre,
+            codigo=codigo,
+            descripcion=payload.descripcion,
+            duracion_periodos=payload.duracion_periodos,
+            creditos_totales=payload.creditos_totales,
+            plan_estudio_id=payload.plan_estudio_id,
+        )
+        db.add(programa)
+        await db.flush()
+    else:
+        if por_codigo is not None:
+            programa.nombre = nombre
+        programa.descripcion = payload.descripcion or programa.descripcion
+        programa.duracion_periodos = payload.duracion_periodos
+        programa.creditos_totales = payload.creditos_totales
+        if payload.plan_estudio_id is not None:
+            programa.plan_estudio_id = payload.plan_estudio_id
+        programa.estado = "activo"
+
+    res_modulos = await db.execute(
+        select(ProgramaModulo.id).where(ProgramaModulo.programa_id == programa.id)
+    )
+    modulo_ids = res_modulos.scalars().all()
+    if modulo_ids:
+        await db.execute(
+            delete(ProgramaUnidad).where(ProgramaUnidad.programa_modulo_id.in_(modulo_ids))
+        )
+        await db.execute(
+            delete(ProgramaModulo).where(ProgramaModulo.id.in_(modulo_ids))
+        )
+
+    unidades_importadas = 0
+    for modulo in payload.modulos:
+        db_modulo = ProgramaModulo(
+            programa_id=programa.id,
+            nombre=modulo.nombre,
+            periodo=modulo.periodo,
+            horas_totales=modulo.horas_totales,
+            creditos=modulo.creditos,
+            orden=modulo.orden,
+        )
+        db.add(db_modulo)
+        await db.flush()
+        for unidad in modulo.unidades:
+            db.add(ProgramaUnidad(
+                programa_modulo_id=db_modulo.id,
+                nombre=unidad.nombre,
+                horas_teoria=unidad.horas_teoria,
+                horas_practica=unidad.horas_practica,
+                creditos=unidad.creditos,
+                orden=unidad.orden,
+            ))
+            unidades_importadas += 1
+
+    request_id = request.headers.get("X-Request-ID", "unknown")
+    db.add(OutboxEvent(
+        event_type="carrera.plan.sincronizado",
+        payload={
+            "id": programa.id,
+            "nombre": programa.nombre,
+            "codigo": programa.codigo,
+            "metadata": {"request_id": request_id},
+        },
+    ))
+    await db.commit()
+    await db.refresh(programa)
+
+    return {
+        "id": programa.id,
+        "nombre": programa.nombre,
+        "codigo": programa.codigo,
+        "creado": creado,
+        "modulos_importados": len(payload.modulos),
+        "unidades_importadas": unidades_importadas,
+    }
 
 # Endpoints Periodos Academicos
 @router.post("/periodos", response_model=PeriodoResponse, status_code=status.HTTP_201_CREATED)

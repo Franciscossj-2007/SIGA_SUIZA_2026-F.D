@@ -488,49 +488,37 @@ export function AcademicDashboard() {
       }
       const planId = planData.plan_id || null;
 
-      // 2. Registrar el programa académico en mod-programas-estudio
-      const programaData = {
+      const programaPlan = {
         nombre: nombreCarrera,
         codigo: codigoCarrera,
         descripcion: previewData.descripcion || 'Carrera importada desde Plan MINEDU',
         creditos_totales: parseInt(previewData.creditos_totales) || 0,
         duracion_periodos: 6,
-        plan_estudio_id: planId
+        plan_estudio_id: planId,
+        modulos: modulos.map((modData, i) => ({
+          nombre: modData.nombre,
+          periodo: modData.orden || i + 1,
+          horas_totales: modData.horas || 0,
+          creditos: modData.creditos || 0,
+          orden: modData.orden || i + 1,
+          unidades: Array.isArray(modData.unidades) ? modData.unidades.map((udData, j) => ({
+            nombre: udData.nombre,
+            horas_teoria: udData.horas || 0,
+            horas_practica: 0,
+            creditos: udData.creditos || 0,
+            orden: j + 1
+          })) : []
+        }))
       };
-      
-      const createdProgram = await apiClient.callModule('mod-programas-estudio', 'programas', 'POST', programaData);
 
-      // 3. Registrar módulos y unidades didácticas en mod-programas-estudio
-      if (createdProgram && createdProgram.id && Array.isArray(previewData.modulos)) {
-        for (let i = 0; i < previewData.modulos.length; i++) {
-          const modData = previewData.modulos[i];
-          const moduloToCreate = {
-            nombre: modData.nombre,
-            periodo: modData.orden || i + 1,
-            horas_totales: modData.horas || 0,
-            creditos: modData.creditos || 0,
-            orden: modData.orden || i + 1
-          };
-          
-          const createdModulo = await apiClient.callModule('mod-programas-estudio', `programas/${createdProgram.id}/modulos`, 'POST', moduloToCreate);
-          
-          if (createdModulo && createdModulo.id && Array.isArray(modData.unidades)) {
-            for (let j = 0; j < modData.unidades.length; j++) {
-              const udData = modData.unidades[j];
-              const unidadToCreate = {
-                nombre: udData.nombre,
-                horas_teoria: udData.horas || 0,
-                horas_practica: 0,
-                creditos: udData.creditos || 0,
-                orden: j + 1
-              };
-              await apiClient.callModule('mod-programas-estudio', `modulos/${createdModulo.id}/unidades`, 'POST', unidadToCreate);
-            }
-          }
-        }
-      }
+      const programa = await apiClient.callModule(
+        'mod-programas-estudio',
+        'programas/sincronizar-plan',
+        'POST',
+        programaPlan
+      );
 
-      toast.success(`La carrera "${nombreCarrera}" (${codigoCarrera}) y su estructura curricular fueron creadas exitosamente.`);
+      toast.success(`El plan de "${nombreCarrera}" (${codigoCarrera}) y su malla fueron ${programa?.creado ? 'creados' : 'actualizados'} exitosamente.`);
       setShowImportModal(false);
       setImportFile(null);
       setPreviewData(null);
