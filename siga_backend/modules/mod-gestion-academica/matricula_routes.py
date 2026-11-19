@@ -111,7 +111,10 @@ async def _tiene_matricula_vigente(db, estudiante_id, periodo_id) -> bool:
 # Sección 1 — Admisión: Excel/JSON + matrícula automática de Ciclo I + ficha
 # ---------------------------------------------------------------------------
 
+CODIGOS_PRUEBA = {"439"}
+
 _MAP_COLUMNAS = {
+    "codigo": ["codigo", "código"],
     "dni": ["dni", "nro de documento", "numero de documento", "n° de documento", "documento"],
     "nombres": ["nombres", "nombre", "nombres completos"],
     "apellido_paterno": ["apellido paterno", "paterno", "primer apellido"],
@@ -180,17 +183,18 @@ def _validar_registro(registro, numero, errores):
     return True
 
 
-def parse_excel_ingresantes(contenido: bytes) -> tuple[List[dict], List[str]]:
-    excel = pd.ExcelFile(BytesIO(contenido))
-    hoja = excel.sheet_names[0]
-    df = pd.read_excel(excel, sheet_name=hoja)
-    cols = _resolver_columnas(df.columns)
-
-    registros = []
-    errores = []
+def _procesar_hoja(df, cols, hoja, modalidad_default, dnis_vistos, registros, errores):
     for numero, (_, fila) in enumerate(df.iterrows(), start=2):
         dni = _digitos(fila.get(cols["dni"]))
         if not dni:
+            continue
+        etiqueta = f"{numero} ({hoja})"
+        codigo = _limpiar(fila.get(cols["codigo"])) if cols.get("codigo") else None
+        if codigo in CODIGOS_PRUEBA:
+            errores.append(f"Fila {etiqueta}: fila de prueba descartada (código {codigo}).")
+            continue
+        if dni in dnis_vistos:
+            errores.append(f"Fila {etiqueta}: DNI duplicado {dni}.")
             continue
         apellidos = _limpiar(fila.get(cols["apellidos"])) if cols.get("apellidos") else None
         if not apellidos:
@@ -204,10 +208,45 @@ def parse_excel_ingresantes(contenido: bytes) -> tuple[List[dict], List[str]]:
             "programa_id": _limpiar(fila.get(cols["programa_id"])) if cols.get("programa_id") else None,
             "celular": _digitos(fila.get(cols["celular"])) if cols.get("celular") else None,
             "email_personal": _limpiar(fila.get(cols["email_personal"])) if cols.get("email_personal") else None,
-            "modalidad": (_limpiar(fila.get(cols["modalidad"])) if cols.get("modalidad") else None) or "ORDINARIO",
+            "modalidad": (_limpiar(fila.get(cols["modalidad"])) if cols.get("modalidad") else None) or modalidad_default,
         }
-        if _validar_registro(registro, numero, errores):
+        if _validar_registro(registro, etiqueta, errores):
+            dnis_vistos.add(dni)
             registros.append(registro)
+
+
+def parse_excel_ingresantes(contenido: bytes) -> tuple[List[dict], List[str]]:
+    excel = pd.ExcelFile(BytesIO(contenido))
+    hojas = {normalizar_texto(nombre): nombre for nombre in excel.sheet_names}
+    hoja = hojas.get("b_datos")
+    if hoja is None:
+        raise ValueError(
+            "El Excel debe contener una hoja 'B_Datos'. "
+            f"Hojas encontradas: {excel.sheet_names}"
+        )
+
+    df = pd.read_excel(excel, sheet_name=hoja)
+    cols = _resolver_columnas(df.columns)
+
+    registros = []
+    errores = []
+    dnis_vistos = set()
+    _procesar_hoja(df, cols, hoja, "ORDINARIO", dnis_vistos, registros, errores)
+
+    hoja_exonerados = hojas.get("b_datos_exonerados")
+    if hoja_exonerados:
+        df_exonerados = pd.read_excel(excel, sheet_name=hoja_exonerados)
+        cols_exonerados = _resolver_columnas(df_exonerados.columns)
+        _procesar_hoja(
+            df_exonerados,
+            cols_exonerados,
+            hoja_exonerados,
+            "EXONERADO",
+            dnis_vistos,
+            registros,
+            errores,
+        )
+
     return registros, errores
 
 
@@ -423,7 +462,7 @@ async def matricular_ingresantes(
     query = select(Estudiante)
     if payload.estudiante_ids:
         query = query.where(Estudiante.id.in_(payload.estudiante_ids))
-    if payload.programa_id:
+    elif payload.programa_id:
         query = query.where(Estudiante.programa_id == payload.programa_id)
     estudiantes = (await db.execute(query)).scalars().all()
 

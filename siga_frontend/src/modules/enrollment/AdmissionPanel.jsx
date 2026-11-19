@@ -4,12 +4,16 @@ import {
   Search, CircleCheckBig, AlertTriangle, Info,
 } from 'lucide-react';
 import { apiClient, API_BASE } from '../../core/api/client';
+import { PROGRAMAS, getProgramaLabel } from '../../core/catalog/programas';
 import { SectionInfoBlock } from './SectionInfoBlock';
 import { getDefaultPeriod, getPeriodLabel, getPeriodLabelById, isHistoricalPeriod, isFirstPeriodOfYear } from './periodUtils';
 import './enrollmentPremium.css';
 
 const EXTENSIONES_PERMITIDAS = /\.(xlsx|xls|json)$/i;
 const MAX_ARCHIVO = 25 * 1024 * 1024;
+const PROGRAMAS_ADMISION = PROGRAMAS
+  .filter(programa => programa.id !== 'ALL')
+  .map(programa => ({ id: programa.id, nombre: programa.label }));
 
 const describirError = (detail) => {
   if (typeof detail === 'string') return detail;
@@ -43,7 +47,6 @@ const Badge = ({ children, tone = 'slate' }) => {
  * al procesar, mostrando el resumen y la ficha de cada ingresante.
  */
 export function AdmissionPanel() {
-  const [programs, setPrograms] = useState([]);
   const [periods, setPeriods] = useState([]);
   const [programaId, setProgramaId] = useState('');
   const [periodoId, setPeriodoId] = useState('');
@@ -60,19 +63,13 @@ export function AdmissionPanel() {
   useEffect(() => {
     (async () => {
       try {
-        const [p, pe] = await Promise.all([
-          apiClient.request('/api/mod-programas-estudio/programas').catch(() => []),
-          apiClient.callModule('mod-programas-estudio', 'periodos').catch(() => []),
-        ]);
-        const prog = Array.isArray(p) ? p : [];
+        const pe = await apiClient.callModule('mod-programas-estudio', 'periodos').catch(() => []);
         const per = Array.isArray(pe) ? pe : [];
-        setPrograms(prog);
         setPeriods(per);
-        if (prog.length > 0) setProgramaId(String(prog[0].id));
         const activo = getDefaultPeriod(per);
         if (activo) setPeriodoId(String(activo.id));
       } catch (e) {
-        console.error('No se pudieron cargar programas/periodos:', e);
+        console.error('No se pudieron cargar periodos:', e);
       }
     })();
   }, []);
@@ -171,7 +168,7 @@ export function AdmissionPanel() {
             onChange={(e) => setProgramaId(e.target.value)}
           >
             <option value="">(Usar el del archivo / sin programa)</option>
-            {programs.map((p) => (
+            {PROGRAMAS_ADMISION.map((p) => (
               <option key={p.id} value={p.id}>{p.nombre}</option>
             ))}
           </select>
@@ -325,7 +322,7 @@ export function AdmissionPanel() {
                     <td className="py-2 pr-4 text-slate-700">{r.nombres}</td>
                     <td className="py-2 pr-4 text-slate-700">{r.apellidos}</td>
                     <td className="py-2 pr-4 text-slate-500">
-                      {programs.find(p => String(p.id) === String(r.programa_id || programaId))?.nombre || '-'}
+                      {r.programa_id || programaId ? getProgramaLabel(r.programa_id || programaId) : '-'}
                     </td>
                     <td className="py-2 pr-4 text-slate-500">{r.celular || '-'}</td>
                     <td className="py-2 pr-4 text-slate-500">{r.email_personal || '-'}</td>
