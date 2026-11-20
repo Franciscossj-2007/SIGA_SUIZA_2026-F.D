@@ -953,6 +953,12 @@ export function StudentMaster() {
     });
     if (!ok) return;
 
+    const fetchConLimite = (url, options = {}, ms = 10000) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), ms);
+      return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+    };
+
     const leerRespuesta = async (res) => {
       const textBody = await res.text().catch(() => '');
       let data = null;
@@ -978,9 +984,9 @@ export function StudentMaster() {
       const token = localStorage.getItem('token');
       const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
 
-      const resAdmision = await fetch(`${API_BASE}/api/mod-admision/admitidos`, {
+      const resAdmision = await fetchConLimite(`${API_BASE}/api/mod-admision/admitidos`, {
         headers: authHeaders
-      });
+      }, 8000);
       const admResp = await leerRespuesta(resAdmision);
       const fallbackAdm = resAdmision.headers.get('x-fallback') || resAdmision.headers.get('X-Fallback');
 
@@ -1001,7 +1007,7 @@ export function StudentMaster() {
 
       const admitidos = Array.isArray(admisionData.admitidos) ? admisionData.admitidos : [];
       if (admitidos.length === 0) {
-        toast.info('No se encontraron ingresantes cargados en Admisión. Cargue y procese primero el archivo Excel en Administración > Admisión.');
+        toast.info('No hay nómina de admisión cargada. Cargue y procese el Excel en Administración > Admisión.');
         setLoading(false);
         return;
       }
@@ -1010,14 +1016,14 @@ export function StudentMaster() {
         toast.warning(`Programas no reconocidos en admisión: ${admisionData.programas_no_reconocidos.join(', ')}. Esos registros podrían no sincronizarse.`);
       }
 
-      const resIngesta = await fetch(`${API_BASE}/api/mod-gestion-academica/admision/ingesta`, {
+      const resIngesta = await fetchConLimite(`${API_BASE}/api/mod-gestion-academica/admision/ingesta`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...authHeaders
         },
         body: JSON.stringify({ ...admisionData, admitidos })
-      });
+      }, 20000);
 
       const ingResp = await leerRespuesta(resIngesta);
       const fallbackIng = resIngesta.headers.get('x-fallback') || resIngesta.headers.get('X-Fallback');
@@ -1045,7 +1051,11 @@ export function StudentMaster() {
       }
     } catch (e) {
       console.error(e);
-      toast.error(e.message || 'Error de conexión al sincronizar admisión.');
+      if (e?.name === 'AbortError') {
+        toast.error('Tiempo de espera agotado al conectar con Admisión. Verifique que el módulo esté activo.');
+      } else {
+        toast.error(e.message || 'Error de conexión al sincronizar admisión.');
+      }
     }
     setLoading(false);
   };
