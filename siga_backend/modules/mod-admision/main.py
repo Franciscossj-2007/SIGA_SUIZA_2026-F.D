@@ -182,7 +182,20 @@ def _valor(row, columnas, campo):
 def _texto(valor):
     if valor is None:
         return ""
-    return str(valor).strip()
+    if isinstance(valor, bool):
+        return str(valor).strip()
+    if isinstance(valor, int):
+        return str(valor)
+    if isinstance(valor, float):
+        if valor != valor:  # NaN
+            return ""
+        if valor.is_integer():
+            return str(int(valor))
+        return format(valor, "f").rstrip("0").rstrip(".")
+    texto = str(valor).strip()
+    if re.fullmatch(r"\d+\.0+", texto):
+        texto = texto.split(".", 1)[0]
+    return texto
 
 
 def _dni(valor):

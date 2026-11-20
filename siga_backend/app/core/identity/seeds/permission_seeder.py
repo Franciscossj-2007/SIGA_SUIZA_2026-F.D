@@ -99,7 +99,24 @@ class PermissionSeeder(BaseSeeder):
             for perms in self.ROLE_PERMISSIONS.values()
             for perm in perms
         }
-        return not all_permission_names.issubset(existing)
+        if not all_permission_names.issubset(existing):
+            return True
+
+        result = await self.db.execute(select(CoreRole))
+        roles = {role.name: role.id for role in result.scalars().all()}
+        res_p = await self.db.execute(select(CorePermission))
+        perms = {p.name: p.id for p in res_p.scalars().all()}
+        res_rp = await self.db.execute(select(role_permissions))
+        existing_assoc = {(row.role_id, row.permission_id) for row in res_rp.fetchall()}
+        for role_name, perm_names in self.ROLE_PERMISSIONS.items():
+            role_id = roles.get(role_name)
+            if not role_id:
+                continue
+            for perm_name in perm_names:
+                perm_id = perms.get(perm_name)
+                if perm_id and (role_id, perm_id) not in existing_assoc:
+                    return True
+        return False
 
     async def run(self) -> List[CorePermission]:
         # Obtener roles existentes

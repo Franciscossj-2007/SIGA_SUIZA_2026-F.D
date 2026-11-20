@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../../core/auth/useAuth';
 import { API_BASE } from '../../core/api/client';
 import { useToast } from '../../core/ui/ToastContext';
+import { useConfirm } from '../../core/ui/ConfirmModal';
 import { getProgramaLabel } from '../../core/catalog/programas';
 import techBg from '../../assets/tech-bg.jpg';
 import { EditStudentModal } from './EditStudentModal';
@@ -519,6 +520,7 @@ function ProgramaFilter({ value, onChange, programas = [] }) {
 export function StudentMaster() {
   const { user } = useAuth();
   const toast = useToast();
+  const confirmDialog = useConfirm();
   const userRoles = user?.roles ? user.roles.map(r => typeof r === 'string' ? r : r.nombre || r.name) : [];
   const primaryRole = user?.is_superuser ? 'superadmin' : (userRoles.length > 0 ? userRoles[0] : (user?.role || 'invitado'));
   const userRole = primaryRole;
@@ -939,33 +941,67 @@ export function StudentMaster() {
     const rol = String(userRole || '').toLowerCase().trim();
     const rolesPermitidos = new Set(['superadmin', 'admin', 'admin_admision', 'secretaria_academica']);
     if (!rolesPermitidos.has(rol)) {
-      toast.error("No tienes permisos para sincronizar ingresantes desde Admisión.");
+      toast.error('No tienes permisos para sincronizar ingresantes desde Admisión.');
       return;
     }
 
-    const ok = await toast.confirm({
+    const ok = await confirmDialog({
       title: 'Sincronizar Admisión',
       message: '¿Sincronizar lista de ingresantes desde el módulo de Admisión?',
       type: 'info',
       confirmText: 'Sí, sincronizar'
     });
     if (!ok) return;
+
+    const leerRespuesta = async (res) => {
+      const textBody = await res.text().catch(() => '');
+      let data = null;
+      if (textBody) {
+        try { data = JSON.parse(textBody); } catch { data = null; }
+      }
+      return { text: textBody, data };
+    };
+
+    const detalleDe = (data, textBody, fallback) => {
+      let detalle = data?.detail ?? data?.message ?? data;
+      if (Array.isArray(detalle)) {
+        detalle = detalle.map((item) => item?.msg || item?.message || JSON.stringify(item)).join(' | ');
+      } else if (detalle && typeof detalle === 'object') {
+        detalle = detalle.message || detalle.error || JSON.stringify(detalle);
+      }
+      if (!detalle && textBody && !String(textBody).trim().startsWith('<')) detalle = textBody;
+      return detalle || fallback;
+    };
+
     setLoading(true);
     try {
-      // via gateway, do not puncture the module directly
+      const token = localStorage.getItem('token');
+      const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+
       const resAdmision = await fetch(`${API_BASE}/api/mod-admision/admitidos`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        headers: authHeaders
       });
+      const admResp = await leerRespuesta(resAdmision);
+      const fallbackAdm = resAdmision.headers.get('x-fallback') || resAdmision.headers.get('X-Fallback');
 
       if (!resAdmision.ok) {
-        const errText = await resAdmision.text().catch(() => '');
-        throw new Error(errText || "No se pudo conectar con el módulo de Admisión.");
+        const detalle = detalleDe(admResp.data, admResp.text, `HTTP ${resAdmision.status}`);
+        throw new Error(`No se pudo obtener admitidos (${resAdmision.status}): ${detalle}`);
       }
-      const admisionData = await resAdmision.json().catch(() => ({}));
-      const admitidos = Array.isArray(admisionData.admitidos) ? admisionData.admitidos : [];
 
+      let admisionData = admResp.data && typeof admResp.data === 'object' ? admResp.data : {};
+      if ((fallbackAdm || (admisionData && typeof admisionData.status === 'string' && 'data' in admisionData)) && !Array.isArray(admisionData.admitidos)) {
+        if (admisionData.status && admisionData.status !== 'cached') {
+          throw new Error(`Módulo de Admisión no disponible: ${admisionData.message || detalleDe(admisionData.data, '', 'sin conexión con el servicio de admisión')}`);
+        }
+        if (admisionData.data && typeof admisionData.data === 'object' && !Array.isArray(admisionData.data)) {
+          admisionData = admisionData.data;
+        }
+      }
+
+      const admitidos = Array.isArray(admisionData.admitidos) ? admisionData.admitidos : [];
       if (admitidos.length === 0) {
-        toast.info("No se encontraron ingresantes cargados en Admisión. Cargue y procese primero el archivo Excel en Administración > Admisión.");
+        toast.info('No se encontraron ingresantes cargados en Admisión. Cargue y procese primero el archivo Excel en Administración > Admisión.');
         setLoading(false);
         return;
       }
@@ -978,38 +1014,34 @@ export function StudentMaster() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+          ...authHeaders
         },
         body: JSON.stringify({ ...admisionData, admitidos })
       });
 
-      const ingestaData = await resIngesta.json().catch(async () => ({ detail: await resIngesta.text().catch(() => '') }));
-      if (resIngesta.ok) {
+      const ingResp = await leerRespuesta(resIngesta);
+      const fallbackIng = resIngesta.headers.get('x-fallback') || resIngesta.headers.get('X-Fallback');
+
+      if (resIngesta.ok && !(fallbackIng && ingResp.data && ingResp.data.status && ingResp.data.status !== 'cached')) {
+        const ingestaData = (ingResp.data && ingResp.data.status === 'cached' && ingResp.data.data) ? ingResp.data.data : (ingResp.data || {});
         const creados = ingestaData.estudiantes_creados ?? 0;
         const existentes = ingestaData.estudiantes_existentes ?? 0;
         const omitidos = ingestaData.omitidos ?? 0;
         const errores = Array.isArray(ingestaData.errores) ? ingestaData.errores : [];
         const resumen = `Sincronización completada: ${creados} nuevos, ${existentes} ya existentes, ${omitidos} omitidos.`;
-        if (creados > 0) {
-          toast.success(resumen);
-        } else if (omitidos > 0 || errores.length > 0) {
-          toast.warning(resumen);
-        } else {
-          toast.info(resumen);
-        }
+
+        if (creados > 0) toast.success(resumen);
+        else if (omitidos > 0 || errores.length > 0) toast.warning(resumen);
+        else toast.info(resumen);
+
         if (errores.length > 0) {
           console.warn('Errores de sincronización de admisión:', errores);
           toast.info(`Detalle: ${errores.slice(0, 2).join(' | ')}${errores.length > 2 ? '…' : ''}`);
         }
         if (creados > 0 || existentes > 0) handleSearch('');
       } else {
-        let detalle = ingestaData?.detail ?? ingestaData;
-        if (Array.isArray(detalle)) {
-          detalle = detalle.map((item) => item?.msg || JSON.stringify(item)).join(' | ');
-        } else if (typeof detalle === 'object') {
-          detalle = detalle?.message || JSON.stringify(detalle);
-        }
-        toast.error(`Error en la sincronización: ${detalle || 'No se pudo procesar la ingesta.'}`);
+        const detalle = detalleDe(ingResp.data, ingResp.text, `HTTP ${resIngesta.status}`);
+        toast.error(`Error en la sincronización (${resIngesta.status}): ${detalle}`);
       }
     } catch (e) {
       console.error(e);
