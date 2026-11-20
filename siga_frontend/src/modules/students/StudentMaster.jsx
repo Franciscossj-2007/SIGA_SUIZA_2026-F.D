@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../../core/auth/useAuth';
 import { API_BASE } from '../../core/api/client';
 import { useToast } from '../../core/ui/ToastContext';
-import { PROGRAMAS, PROGRAMAS_OPTIONS, getProgramaLabel } from '../../core/catalog/programas';
+import { getProgramaLabel } from '../../core/catalog/programas';
 import techBg from '../../assets/tech-bg.jpg';
 import { EditStudentModal } from './EditStudentModal';
 import { StudentDetail } from './StudentDetail';
@@ -413,6 +413,13 @@ const createEmptyStudentForm = (programaId = '') => ({
 
 const TIPOS_SANGRE = ['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-'];
 
+const normalizarBusqueda = (valor) => String(valor ?? '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .toLowerCase();
+
 const compareStudentsByCarrera = (a, b) => {
   const carreraA = a.programa_id ? getProgramaLabel(a.programa_id) : '';
   const carreraB = b.programa_id ? getProgramaLabel(b.programa_id) : '';
@@ -424,11 +431,14 @@ const compareStudentsByCarrera = (a, b) => {
   return String(a.nombres ?? '').localeCompare(String(b.nombres ?? ''), 'es', { sensitivity: 'base' });
 };
 
-function ProgramaFilter({ value, onChange }) {
+function ProgramaFilter({ value, onChange, programas = [] }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef(null);
-  const selected = PROGRAMAS.find(p => String(p.id) === String(value)) || PROGRAMAS[0];
-  const isAll = selected.id === 'ALL';
+  const opciones = programas.length > 0
+    ? [{ id: 'ALL', label: 'Todos los Programas' }, ...programas]
+    : [];
+  const selected = opciones.find(p => p.id === String(value)) || opciones[0];
+  const isAll = selected?.id === 'ALL';
 
   useEffect(() => {
     if (!open) return;
@@ -443,6 +453,8 @@ function ProgramaFilter({ value, onChange }) {
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [open]);
+
+  if (!selected) return null;
 
   return (
     <div ref={containerRef} className="relative w-full md:w-80">
@@ -476,7 +488,7 @@ function ProgramaFilter({ value, onChange }) {
             <span className="text-[10px] font-bold uppercase tracking-wider text-primary/80">Filtrar por programa</span>
           </div>
           <div className="max-h-72 overflow-y-auto custom-scrollbar p-1.5" role="listbox">
-            {PROGRAMAS.map(p => {
+            {opciones.map(p => {
               const active = String(p.id) === String(value);
               const all = p.id === 'ALL';
               return (
@@ -517,6 +529,7 @@ export function StudentMaster() {
   const [editingStudent, setEditingStudent] = useState(null);
   const [wizardStep, setWizardStep] = useState(1);
   const searchTermRef = useRef('');
+  const searchRequestRef = useRef(0);
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [currentPrograma, setCurrentPrograma] = useState('ALL');
   const [stepDir, setStepDir] = useState('forward');
@@ -530,6 +543,51 @@ export function StudentMaster() {
   const [codeLoading, setCodeLoading] = useState(false);
 
   const [showMissing, setShowMissing] = useState(false);
+  const [programas, setProgramas] = useState([]);
+
+  const labelPrograma = (programaId) => {
+    const cargado = programas.find(p => p.id === String(programaId));
+    return cargado ? cargado.label : getProgramaLabel(programaId);
+  };
+
+  const programasOptions = [
+    { value: '', label: 'Seleccione una carrera...' },
+    ...programas.map(p => ({ value: p.id, label: p.label })),
+  ];
+  const programaActivo = currentPrograma !== 'ALL' && programas.some(p => p.id === String(currentPrograma))
+    ? currentPrograma
+    : 'ALL';
+
+  useEffect(() => {
+    let activo = true;
+    const cargarProgramas = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/mod-programas-estudio/programas`, {
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        });
+        if (!res.ok || res.headers.get('X-Fallback') === 'true') {
+          if (activo) setProgramas([]);
+          return;
+        }
+        const data = await res.json();
+        const lista = Array.isArray(data) ? data : [];
+        if (activo) {
+          setProgramas(lista
+            .filter(p => p?.id !== null && p?.id !== undefined)
+            .map(p => ({
+              id: String(p.id),
+              codigo: p.codigo || '',
+              label: p.nombre || getProgramaLabel(p.id),
+            })));
+        }
+      } catch (e) {
+        console.error('No se pudieron cargar los programas de estudio:', e);
+        if (activo) setProgramas([]);
+      }
+    };
+    cargarProgramas();
+    return () => { activo = false; };
+  }, []);
 
   useEffect(() => {
     if (wizardBodyRef.current) {
@@ -549,9 +607,11 @@ export function StudentMaster() {
   const missingBySector = (stepId) => (SECTOR_REQUIRED[stepId] || []).filter(isFieldMissing);
   const sectorHasMissing = (stepId) => missingBySector(stepId).length > 0;
   const defaultProgramaId = () => {
-    if (currentPrograma !== 'ALL') return currentPrograma;
-    if (form.programa_id) return form.programa_id;
-    return user?.programa_id ? String(user.programa_id) : '';
+    if (programas.length === 0) return '';
+    if (currentPrograma !== 'ALL' && programas.some(p => p.id === String(currentPrograma))) return currentPrograma;
+    if (form.programa_id && programas.some(p => p.id === String(form.programa_id))) return form.programa_id;
+    if (user?.programa_id && programas.some(p => p.id === String(user.programa_id))) return String(user.programa_id);
+    return '';
   };
 
   const generarCodigoLocalUnico = () => {
@@ -590,7 +650,8 @@ export function StudentMaster() {
     }
   };
 
-  const handleSearch = useCallback(async (val = '', programa = currentPrograma) => {
+  const handleSearch = useCallback(async (val = '', programa = programaActivo) => {
+    const requestId = ++searchRequestRef.current;
     setSearchTerm(val);
     searchTermRef.current = val;
     setCurrentPage(1);
@@ -616,6 +677,7 @@ export function StudentMaster() {
           detalle = `El servicio de estudiantes respondio ${res.status}.`;
         }
         console.error('API Error:', detalle);
+        if (requestId !== searchRequestRef.current) return;
         setStudents([]);
         setLoadError(detalle);
         return;
@@ -625,27 +687,28 @@ export function StudentMaster() {
         const detalle = res.headers.get('X-Fallback-Message')
           || 'El servicio de estudiantes respondio con datos degradados.';
         console.error('Respuesta degradada:', detalle);
+        if (requestId !== searchRequestRef.current) return;
         setStudents([]);
         setLoadError(detalle);
         return;
       }
 
       const data = await res.json();
+      if (requestId !== searchRequestRef.current) return;
       const dataArray = Array.isArray(data) ? data : [];
       const sorted = [...dataArray].sort(compareStudentsByCarrera);
 
-      const term = String(val || '').trim();
-      if (term.length >= 3) {
-        const lowerTerm = term.toLowerCase();
+      const term = normalizarBusqueda(val);
+      if (term) {
         const filtered = sorted.filter(s => {
-          const dni = String(s.dni ?? '');
-          const nombres = String(s.nombres ?? '').toLowerCase();
-          const apellidos = String(s.apellidos ?? '').toLowerCase();
-          const codigo = String(s.codigo_estudiante ?? '');
-          return dni.includes(term)
-            || nombres.includes(lowerTerm)
-            || apellidos.includes(lowerTerm)
-            || codigo.includes(term);
+          const campos = [
+            s.dni,
+            s.codigo_estudiante,
+            s.nombres,
+            s.apellidos,
+            `${s.nombres ?? ''} ${s.apellidos ?? ''}`,
+          ];
+          return campos.some(campo => normalizarBusqueda(campo).includes(term));
         });
         setStudents(filtered);
       } else {
@@ -653,12 +716,13 @@ export function StudentMaster() {
       }
     } catch (e) {
       console.error(e);
+      if (requestId !== searchRequestRef.current) return;
       setStudents([]);
       setLoadError('No se pudo conectar con el servidor. Verifique que el backend este levantado.');
     } finally {
-      setLoading(false);
+      if (requestId === searchRequestRef.current) setLoading(false);
     }
-  }, [currentPrograma]);
+  }, [programaActivo]);
 
   useEffect(() => {
     if (userRole === 'invitado') return undefined;
@@ -668,9 +732,9 @@ export function StudentMaster() {
       queueMicrotask(() => setCurrentPrograma(programaAsignado));
       return undefined;
     }
-    queueMicrotask(() => { handleSearch(searchTermRef.current, currentPrograma); });
+    queueMicrotask(() => { handleSearch(searchTermRef.current, programaActivo); });
     return undefined;
-  }, [currentPrograma, userRole, handleSearch, user?.email, user?.programa_id]);
+  }, [programaActivo, currentPrograma, userRole, handleSearch, user?.email, user?.programa_id]);
 
   useEffect(() => {
     if (!showModal) return undefined;
@@ -813,12 +877,12 @@ export function StudentMaster() {
         metadata_admision,
       };
 
-      // Garantizar asignación obligatoria de programa_id
-      const assignedProg = form.programa_id
-        || (currentPrograma && currentPrograma !== 'ALL' ? currentPrograma : null)
-        || (user?.programa_id ? String(user.programa_id) : null)
-        || (user?.email === 'secretaria_prog@siga.edu' ? '2' : '1');
-      payload.programa_id = parseInt(assignedProg, 10);
+      const programaCargado = (id) => Boolean(id) && programas.some(p => p.id === String(id));
+      const assignedProg = programaCargado(form.programa_id)
+        ? form.programa_id
+        : (programaCargado(currentPrograma) ? currentPrograma : null)
+          || (programaCargado(user?.programa_id) ? String(user.programa_id) : null);
+      payload.programa_id = assignedProg ? parseInt(assignedProg, 10) : null;
 
       const res = await fetch(`${API_BASE}/api/mod-gestion-academica/estudiantes/`, {
         method: 'POST',
@@ -872,8 +936,10 @@ export function StudentMaster() {
   };
 
   const handleSincronizar = async () => {
-    if (userRole !== 'superadmin' && userRole !== 'admin') {
-      toast.error("Solo el Super Admin puede ejecutar la ingesta de Admisión.");
+    const rol = String(userRole || '').toLowerCase().trim();
+    const rolesPermitidos = new Set(['superadmin', 'admin', 'admin_admision', 'secretaria_academica']);
+    if (!rolesPermitidos.has(rol)) {
+      toast.error("No tienes permisos para sincronizar ingresantes desde Admisión.");
       return;
     }
 
@@ -1025,7 +1091,7 @@ export function StudentMaster() {
                   icon={GraduationCap}
                   required
                   showMissing={showMissing}
-                  options={PROGRAMAS_OPTIONS}
+                  options={programasOptions}
                   value={form.programa_id}
                   onChange={(programaId) => setForm({ ...form, programa_id: programaId })}
                   placeholder="Buscar carrera..."
@@ -1216,7 +1282,7 @@ export function StudentMaster() {
                 <span className="block text-[11px] font-black uppercase tracking-wider text-primary mb-1 flex items-center gap-1.5">
                   <GraduationCap size={14} /> Carrera / Programa de Estudios
                 </span>
-                <span className="block text-slate-950 font-black break-words">{getProgramaLabel(form.programa_id)}</span>
+                <span className="block text-slate-950 font-black break-words">{labelPrograma(form.programa_id)}</span>
               </div>
               <div className="rounded-xl border-2 border-slate-200 bg-white p-3.5 shadow-sm">
                 <span className="block text-[11px] font-black uppercase tracking-wider text-slate-950 mb-1">Identidad</span>
@@ -1288,15 +1354,15 @@ export function StudentMaster() {
             </div>
           </div>
           <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
-            {['superadmin', 'admin'].includes(userRole) && (
-              <button
-                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-white/15 border border-white/30 text-white font-semibold text-sm backdrop-blur-sm hover:bg-white/25 active:scale-[0.98] transition-all duration-200 min-h-[44px] w-full sm:w-auto"
-                onClick={handleSincronizar}
-              >
-                <CloudDownload size={18} className="shrink-0" />
-                <span className="whitespace-nowrap">Sincronizar desde Admisión</span>
-              </button>
-            )}
+              {['superadmin', 'admin', 'secretaria_academica', 'admin_admision'].includes(userRole) && (
+                <button
+                  onClick={handleSincronizar}
+                  className="inline-flex items-center justify-center gap-2 px-4 sm:px-6 py-2 sm:py-2.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-xl font-bold hover:bg-indigo-100 transition-all active:scale-95 shadow-sm text-sm"
+                >
+                  <CloudDownload className="w-4 h-4 sm:w-5 sm:h-5 flex-shrink-0" />
+                  <span className="whitespace-nowrap">Sincronizar desde Admisión</span>
+                </button>
+              )}
             <button
               className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-white text-primary font-bold text-sm shadow-lg shadow-black/10 hover:bg-primary-soft active:scale-[0.98] transition-all duration-200 min-h-[44px] w-full sm:w-auto"
               onClick={() => {
@@ -1317,7 +1383,7 @@ export function StudentMaster() {
 
       <div className="glass-card p-3 mb-6 flex flex-col md:flex-row md:items-center gap-3 relative z-30 lg:shrink-0">
         {['superadmin', 'admin', 'secretaria_academica', 'admin_admision'].includes(userRole) && (
-          <ProgramaFilter value={currentPrograma} onChange={setCurrentPrograma} />
+          <ProgramaFilter value={programaActivo} onChange={setCurrentPrograma} programas={programas} />
         )}
         <div className="group flex-1 flex items-center gap-3 h-[56px] pl-3 pr-3 rounded-xl border-2 border-slate-200 bg-white shadow-md transition-all duration-200 focus-within:border-primary/60 focus-within:ring-4 focus-within:ring-primary/15 focus-within:shadow-lg focus-within:shadow-primary/10">
           <span className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary-dark text-white flex items-center justify-center flex-shrink-0 shadow-md shadow-primary/40 transition-transform duration-200 group-focus-within:scale-105">
@@ -1383,10 +1449,10 @@ export function StudentMaster() {
             <span className="px-2.5 py-0.5 rounded-full bg-primary/10 text-primary font-black text-xs border border-primary/20">
               {totalStudents} {totalStudents === 1 ? 'registrado' : 'registrados'}
             </span>
-            {currentPrograma !== 'ALL' && (
+            {programaActivo !== 'ALL' && (
               <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 font-bold text-xs border border-slate-200 truncate max-w-[260px]">
                 <GraduationCap size={13} className="text-primary shrink-0" />
-                <span className="truncate">{getProgramaLabel(currentPrograma)}</span>
+                <span className="truncate">{labelPrograma(programaActivo)}</span>
               </span>
             )}
           </div>
@@ -1492,11 +1558,11 @@ export function StudentMaster() {
                       <td className="py-3.5 px-4">
                         <span
                           className="inline-flex items-center gap-1.5 max-w-[240px] truncate rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-1 text-xs font-extrabold text-primary-dark shadow-xs"
-                          title={s.programa_id ? getProgramaLabel(s.programa_id) : 'Sin carrera'}
+                          title={s.programa_id ? labelPrograma(s.programa_id) : 'Sin carrera'}
                         >
                           <GraduationCap size={13} className="shrink-0 text-primary" />
                           <span className="truncate">
-                            {s.programa_id ? getProgramaLabel(s.programa_id) : 'Sin carrera'}
+                            {s.programa_id ? labelPrograma(s.programa_id) : 'Sin carrera'}
                           </span>
                         </span>
                       </td>

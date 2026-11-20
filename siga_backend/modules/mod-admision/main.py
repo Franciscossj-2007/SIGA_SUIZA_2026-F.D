@@ -16,7 +16,7 @@ from sqlalchemy import delete
 
 from database import engine, Base, get_db
 from models import PostulanteAdmitido
-from programas_catalog import resolver_programa_id, normalizar_texto
+from programas_catalog import resolver_programa_id, normalizar_texto, PROGRAMAS, _PROGRAMAS_POR_ID
 
 import sys
 sys.path.append("/app")
@@ -203,6 +203,10 @@ def _procesar_filas(df, columnas, modalidad_por_defecto, resumen, dnis_vistos):
             resumen["omitidas"] += 1
             resumen["errores"].append(f"Fila {numero}: fila de prueba descartada (código {codigo}).")
             continue
+        if not dni:
+            resumen["omitidas"] += 1
+            resumen["errores"].append(f"Fila {numero}: DNI vacío o inválido.")
+            continue
         if not (5 <= len(dni) <= 12):
             resumen["omitidas"] += 1
             resumen["errores"].append(f"Fila {numero}: DNI inválido {dni!r}.")
@@ -223,13 +227,16 @@ def _procesar_filas(df, columnas, modalidad_por_defecto, resumen, dnis_vistos):
             continue
 
         nombre_programa = _texto(_valor(row, columnas, "programa"))
+        if not nombre_programa:
+            resumen["omitidas"] += 1
+            resumen["errores"].append(f"Fila {numero}: programa de estudios vacío.")
+            continue
+
         programa_id = resolver_programa_id(nombre_programa)
         if programa_id is None:
-            resumen["omitidas"] += 1
             resumen["errores"].append(
-                f"Fila {numero}: programa no reconocido {nombre_programa!r}."
+                f"Fila {numero}: programa no reconocido {nombre_programa!r}; se registrará para resolver en sincronización."
             )
-            continue
 
         dnis_vistos.add(dni)
         celular = _dni(_valor(row, columnas, "celular"))
@@ -243,9 +250,10 @@ def _procesar_filas(df, columnas, modalidad_por_defecto, resumen, dnis_vistos):
             email=_texto(_valor(row, columnas, "email")) or None,
             celular=celular or None,
             fecha_nacimiento=_texto(fecha) or None,
-            metadata_admision={**row, "programa_id": programa_id},
+            metadata_admision={**row, "programa_id": programa_id, "programa_nombre": nombre_programa},
         ))
-        resumen["por_programa"][programa_id] = resumen["por_programa"].get(programa_id, 0) + 1
+        clave_programa = programa_id if programa_id is not None else f"no_reconocido:{nombre_programa}"
+        resumen["por_programa"][clave_programa] = resumen["por_programa"].get(clave_programa, 0) + 1
     return admitidos
 
 
@@ -341,6 +349,17 @@ async def get_admitidos(db: AsyncSession = Depends(get_db)):
     no_reconocidos = []
     for record in records:
         programa_id = resolver_programa_id(record.programa_nombre)
+        if programa_id is None and isinstance(record.metadata_admision, dict):
+            for clave in ("programa_id", "programa", "PROGRAMA DE   ESTUDIOS", "PROGRAMA DE ESTUDIOS", "programa_nombre"):
+                programa_id = resolver_programa_id(record.metadata_admision.get(clave))
+                if programa_id is not None:
+                    break
+        if programa_id is not None:
+            try:
+                if int(programa_id) not in _PROGRAMAS_POR_ID:
+                    programa_id = None
+            except Exception:
+                programa_id = None
         if programa_id is None:
             no_reconocidos.append(record.programa_nombre)
         formatted.append({
