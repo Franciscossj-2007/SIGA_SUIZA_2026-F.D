@@ -891,13 +891,21 @@ export function StudentMaster() {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
 
-      if (!resAdmision.ok) throw new Error("No se pudo conectar con Admisión Piloto");
-      let admisionData = await resAdmision.json();
+      if (!resAdmision.ok) {
+        const errText = await resAdmision.text().catch(() => '');
+        throw new Error(errText || "No se pudo conectar con el módulo de Admisión.");
+      }
+      const admisionData = await resAdmision.json().catch(() => ({}));
+      const admitidos = Array.isArray(admisionData.admitidos) ? admisionData.admitidos : [];
 
-      if (admisionData.admitidos.length === 0) {
-        toast.info("No se encontraron ingresantes para el programa seleccionado.");
+      if (admitidos.length === 0) {
+        toast.info("No se encontraron ingresantes cargados en Admisión. Cargue y procese primero el archivo Excel en Administración > Admisión.");
         setLoading(false);
         return;
+      }
+
+      if (Array.isArray(admisionData.programas_no_reconocidos) && admisionData.programas_no_reconocidos.length > 0) {
+        toast.warning(`Programas no reconocidos en admisión: ${admisionData.programas_no_reconocidos.join(', ')}. Esos registros podrían no sincronizarse.`);
       }
 
       const resIngesta = await fetch(`${API_BASE}/api/mod-gestion-academica/admision/ingesta`, {
@@ -906,20 +914,40 @@ export function StudentMaster() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('token')}`
         },
-        body: JSON.stringify(admisionData)
+        body: JSON.stringify({ ...admisionData, admitidos })
       });
 
+      const ingestaData = await resIngesta.json().catch(async () => ({ detail: await resIngesta.text().catch(() => '') }));
       if (resIngesta.ok) {
-        const result = await resIngesta.json();
-        toast.success(`Sincronización exitosa. ${result.estudiantes_creados} nuevos estudiantes ingresados al Core.`);
-        handleSearch('');
+        const creados = ingestaData.estudiantes_creados ?? 0;
+        const existentes = ingestaData.estudiantes_existentes ?? 0;
+        const omitidos = ingestaData.omitidos ?? 0;
+        const errores = Array.isArray(ingestaData.errores) ? ingestaData.errores : [];
+        const resumen = `Sincronización completada: ${creados} nuevos, ${existentes} ya existentes, ${omitidos} omitidos.`;
+        if (creados > 0) {
+          toast.success(resumen);
+        } else if (omitidos > 0 || errores.length > 0) {
+          toast.warning(resumen);
+        } else {
+          toast.info(resumen);
+        }
+        if (errores.length > 0) {
+          console.warn('Errores de sincronización de admisión:', errores);
+          toast.info(`Detalle: ${errores.slice(0, 2).join(' | ')}${errores.length > 2 ? '…' : ''}`);
+        }
+        if (creados > 0 || existentes > 0) handleSearch('');
       } else {
-        const err = await resIngesta.text();
-        toast.error(`Error en la ingesta: ${err}`);
+        let detalle = ingestaData?.detail ?? ingestaData;
+        if (Array.isArray(detalle)) {
+          detalle = detalle.map((item) => item?.msg || JSON.stringify(item)).join(' | ');
+        } else if (typeof detalle === 'object') {
+          detalle = detalle?.message || JSON.stringify(detalle);
+        }
+        toast.error(`Error en la sincronización: ${detalle || 'No se pudo procesar la ingesta.'}`);
       }
     } catch (e) {
       console.error(e);
-      toast.error(e.message);
+      toast.error(e.message || 'Error de conexión al sincronizar admisión.');
     }
     setLoading(false);
   };

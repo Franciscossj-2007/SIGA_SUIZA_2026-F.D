@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 from database import get_db, OutboxEvent
 from models import Estudiante, Matricula, MatriculaDetalle
 from schemas import EstudianteCreate, EstudianteResponse, EstudianteUpdate, MatriculaCreate, MatriculaResponse, IngestaMasivaRequest
-from programas_catalog import es_programa_valido
+from programas_catalog import es_programa_valido, resolver_programa_id
 from datetime import datetime
 from typing import List, Optional
 from pathlib import Path
@@ -117,62 +117,99 @@ async def ingesta_admitidos(request: Request, data: IngestaMasivaRequest, db: As
     Crea los expedientes de estudiantes y dispara eventos para integrarlos al ecosistema (crear usuarios, matricular, etc).
     """
     estudiantes_creados = 0
+    estudiantes_existentes = 0
+    omitidos = 0
+    errores = []
 
     for admitido in data.admitidos:
-        if not es_programa_valido(admitido.programa_id):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Programa no reconocido para el DNI {admitido.dni}: {admitido.programa_id}. Debe ser uno de los 11 programas oficiales.",
+        programa_id = admitido.programa_id
+        if not es_programa_valido(programa_id):
+            candidatos = [
+                programa_id,
+                admitido.programa_nombre,
+                (admitido.metadata_completa or {}).get("programa_id"),
+                (admitido.metadata_completa or {}).get("programa_nombre"),
+                (admitido.metadata_completa or {}).get("programa"),
+                (admitido.metadata_completa or {}).get("PROGRAMA DE   ESTUDIOS"),
+                (admitido.metadata_completa or {}).get("PROGRAMA DE ESTUDIOS"),
+            ]
+            for candidato in candidatos:
+                resuelto = resolver_programa_id(candidato)
+                if es_programa_valido(resuelto):
+                    programa_id = resuelto
+                    break
+
+        if not es_programa_valido(programa_id):
+            omitidos += 1
+            errores.append(
+                f"DNI {admitido.dni}: programa no reconocido ({admitido.programa_id or admitido.programa_nombre or 'sin programa'})."
             )
+            continue
+
+        programa_id = int(programa_id)
+
         # 1. Capa Anticorrupción: Validar si ya existe
         existing = await db.execute(select(Estudiante).where(Estudiante.dni == admitido.dni))
         if existing.scalar_one_or_none():
-            continue # Ya existe, saltamos
-            
+            estudiantes_existentes += 1
+            continue  # Ya existe, saltamos
+
         # Generar código universitario estándar
         year = datetime.now().year
         codigo = f"{year}-{admitido.dni}"
-        
+
         # 2. Crear Estudiante
         db_estudiante = Estudiante(
             codigo_estudiante=codigo,
             dni=admitido.dni,
             nombres=admitido.nombres,
             apellidos=admitido.apellidos,
-            programa_id=admitido.programa_id,
+            programa_id=programa_id,
             celular=admitido.celular,
             email_personal=admitido.email_personal,
             modalidad_admision=admitido.modalidad,
-            metadata_admision=admitido.metadata_completa
+            metadata_admision=admitido.metadata_completa or {}
         )
-        db.add(db_estudiante)
-        await db.flush() # para obtener el ID
-        
-        # 3. Disparar evento para matricular en Ciclo I automáticamente
-        # y para que mod-usuarios le cree su cuenta
-        event_payload = {
-            "event_id": str(uuid.uuid4()),
-            "event_type": "gestion_academica.admision.estudiante_ingresado",
-            "source": "mod-gestion-academica",
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "version": "1.0.0",
-            "data": {
-                "estudiante_id": db_estudiante.id,
-                "dni": db_estudiante.dni,
-                "nombres": db_estudiante.nombres,
-                "apellidos": db_estudiante.apellidos,
-                "programa_id": admitido.programa_id,
-                "periodo_id": admitido.periodo_id,
-                "proceso_admision_id": data.proceso_admision_id
-            },
-            "metadata": {"request_id": request.headers.get("X-Request-ID", "unknown")}
-        }
-        
-        db.add(OutboxEvent(event_type=event_payload["event_type"], payload=event_payload))
+        try:
+            async with db.begin_nested():
+                db.add(db_estudiante)
+                await db.flush()  # para obtener el ID
+
+                # 3. Disparar evento para matricular en Ciclo I automáticamente
+                # y para que mod-usuarios le cree su cuenta
+                event_payload = {
+                    "event_id": str(uuid.uuid4()),
+                    "event_type": "gestion_academica.admision.estudiante_ingresado",
+                    "source": "mod-gestion-academica",
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "version": "1.0.0",
+                    "data": {
+                        "estudiante_id": db_estudiante.id,
+                        "dni": db_estudiante.dni,
+                        "nombres": db_estudiante.nombres,
+                        "apellidos": db_estudiante.apellidos,
+                        "programa_id": programa_id,
+                        "periodo_id": admitido.periodo_id,
+                        "proceso_admision_id": data.proceso_admision_id
+                    },
+                    "metadata": {"request_id": request.headers.get("X-Request-ID", "unknown")}
+                }
+                db.add(OutboxEvent(event_type=event_payload["event_type"], payload=event_payload))
+        except Exception:
+            omitidos += 1
+            errores.append(f"DNI {admitido.dni}: no se pudo registrar (posible DNI/código duplicado).")
+            continue
+
         estudiantes_creados += 1
-        
+
     await db.commit()
-    return {"message": "Ingesta procesada", "estudiantes_creados": estudiantes_creados}
+    return {
+        "message": "Ingesta procesada",
+        "estudiantes_creados": estudiantes_creados,
+        "estudiantes_existentes": estudiantes_existentes,
+        "omitidos": omitidos,
+        "errores": errores,
+    }
 
 @router.post("/estudiantes/", response_model=EstudianteResponse, status_code=status.HTTP_201_CREATED)
 async def crear_estudiante(request: Request, data: EstudianteCreate, db: AsyncSession = Depends(get_db)):

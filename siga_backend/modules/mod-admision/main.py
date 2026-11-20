@@ -258,10 +258,21 @@ def parse_excel_sync(contents: bytes):
 
     hoja_reg = nombres_normalizados.get("b_datos")
     if hoja_reg is None:
-        raise ValueError(
-            "El Excel debe contener una hoja 'B_Datos'. "
-            f"Hojas encontradas: {excel_data.sheet_names}"
-        )
+        for nombre_hoja in excel_data.sheet_names:
+            df_candidato = pd.read_excel(excel_data, sheet_name=nombre_hoja)
+            try:
+                _resolver_columnas(df_candidato)
+                hoja_reg = nombre_hoja
+                break
+            except Exception:
+                continue
+        if hoja_reg is None:
+            raise ValueError(
+                "No se encontró una hoja de datos de admisión válida. "
+                "Use el formato oficial con hoja 'B_Datos' o una hoja con columnas "
+                "NRO DE DOCUMENTO, NOMBRES, APELLIDO PATERNO, APELLIDO MATERNO y PROGRAMA DE ESTUDIOS. "
+                f"Hojas encontradas: {excel_data.sheet_names}"
+            )
 
     df_reg = pd.read_excel(excel_data, sheet_name=hoja_reg)
     columnas = _resolver_columnas(df_reg)
