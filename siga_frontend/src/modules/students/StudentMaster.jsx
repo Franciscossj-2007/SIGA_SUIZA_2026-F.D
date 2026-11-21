@@ -945,14 +945,6 @@ export function StudentMaster() {
       return;
     }
 
-    const ok = await confirmDialog({
-      title: 'Sincronizar Admisión',
-      message: '¿Sincronizar lista de ingresantes desde el módulo de Admisión?',
-      type: 'info',
-      confirmText: 'Sí, sincronizar'
-    });
-    if (!ok) return;
-
     const fetchConLimite = (url, options = {}, ms = 10000) => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), ms);
@@ -979,11 +971,13 @@ export function StudentMaster() {
       return detalle || fallback;
     };
 
+    const token = localStorage.getItem('token');
+    const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+    let admisionData;
+    let admitidos;
+
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
-      const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
-
       const resAdmision = await fetchConLimite(`${API_BASE}/api/mod-admision/admitidos`, {
         headers: authHeaders
       }, 8000);
@@ -995,7 +989,7 @@ export function StudentMaster() {
         throw new Error(`No se pudo obtener admitidos (${resAdmision.status}): ${detalle}`);
       }
 
-      let admisionData = admResp.data && typeof admResp.data === 'object' ? admResp.data : {};
+      admisionData = admResp.data && typeof admResp.data === 'object' ? admResp.data : {};
       if ((fallbackAdm || (admisionData && typeof admisionData.status === 'string' && 'data' in admisionData)) && !Array.isArray(admisionData.admitidos)) {
         if (admisionData.status && admisionData.status !== 'cached') {
           throw new Error(`Módulo de Admisión no disponible: ${admisionData.message || detalleDe(admisionData.data, '', 'sin conexión con el servicio de admisión')}`);
@@ -1005,17 +999,38 @@ export function StudentMaster() {
         }
       }
 
-      const admitidos = Array.isArray(admisionData.admitidos) ? admisionData.admitidos : [];
-      if (admitidos.length === 0) {
-        toast.info('No hay nómina de admisión cargada. Cargue y procese el Excel en Administración > Admisión.');
-        setLoading(false);
-        return;
+      admitidos = Array.isArray(admisionData.admitidos) ? admisionData.admitidos : [];
+    } catch (e) {
+      console.error(e);
+      if (e?.name === 'AbortError') {
+        toast.error('Tiempo de espera agotado al conectar con Admisión. Verifique que el módulo esté activo.');
+      } else {
+        toast.error(e.message || 'Error de conexión al sincronizar admisión.');
       }
+      return;
+    } finally {
+      setLoading(false);
+    }
 
-      if (Array.isArray(admisionData.programas_no_reconocidos) && admisionData.programas_no_reconocidos.length > 0) {
-        toast.warning(`Programas no reconocidos en admisión: ${admisionData.programas_no_reconocidos.join(', ')}. Esos registros podrían no sincronizarse.`);
-      }
+    if (admitidos.length === 0) {
+      toast.error('Falta cargar archivo');
+      return;
+    }
 
+    const ok = await confirmDialog({
+      title: 'Sincronizar Admisión',
+      message: '¿Sincronizar lista de ingresantes desde el módulo de Admisión?',
+      type: 'info',
+      confirmText: 'Sí, sincronizar'
+    });
+    if (!ok) return;
+
+    if (Array.isArray(admisionData.programas_no_reconocidos) && admisionData.programas_no_reconocidos.length > 0) {
+      toast.warning(`Programas no reconocidos en admisión: ${admisionData.programas_no_reconocidos.join(', ')}. Esos registros podrían no sincronizarse.`);
+    }
+
+    setLoading(true);
+    try {
       const resIngesta = await fetchConLimite(`${API_BASE}/api/mod-gestion-academica/admision/ingesta`, {
         method: 'POST',
         headers: {
@@ -1056,8 +1071,9 @@ export function StudentMaster() {
       } else {
         toast.error(e.message || 'Error de conexión al sincronizar admisión.');
       }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleNext = () => {
