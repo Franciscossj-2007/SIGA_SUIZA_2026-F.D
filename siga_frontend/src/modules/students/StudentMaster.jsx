@@ -4,7 +4,7 @@ import { useAuth } from '../../core/auth/useAuth';
 import { API_BASE } from '../../core/api/client';
 import { useToast } from '../../core/ui/ToastContext';
 import { useConfirm } from '../../core/ui/ConfirmModal';
-import { getProgramaLabel } from '../../core/catalog/programas';
+import { PROGRAMAS, getProgramaLabel } from '../../core/catalog/programas';
 import techBg from '../../assets/tech-bg.jpg';
 import { EditStudentModal } from './EditStudentModal';
 import { StudentDetail } from './StudentDetail';
@@ -585,7 +585,8 @@ export function StudentMaster() {
         const lista = Array.isArray(data) ? data : [];
         if (activo) {
           setProgramas(lista
-            .filter(p => p?.id !== null && p?.id !== undefined)
+            .filter(p => p?.id !== null && p?.id !== undefined
+              && PROGRAMAS.some(oficial => oficial.id !== 'ALL' && oficial.id === String(p.id)))
             .map(p => ({
               id: String(p.id),
               codigo: p.codigo || '',

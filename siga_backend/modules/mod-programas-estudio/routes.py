@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete, text
+from sqlalchemy import select, delete, text
 from typing import List, Optional
 from datetime import datetime, date
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -13,6 +13,7 @@ from schemas import (
     SilaboUpdate, PlanTrabajoDocenteUpdate, CargaLectivaUpdate, HorarioPeriodoUpdate
 )
 from shared.validation import CodigoRequerido, TextoRequerido
+from shared.programas_catalog import obtener_programa_oficial
 
 router = APIRouter()
 
@@ -31,6 +32,42 @@ def _limitar_texto(valor, limite=255):
     if valor is None:
         return valor
     return str(valor).strip()[:limite]
+
+
+async def _resolver_programa_oficial(db, nombre, codigo):
+    oficial = obtener_programa_oficial(codigo) or obtener_programa_oficial(nombre)
+    if oficial is None:
+        raise HTTPException(
+            status_code=400,
+            detail="El programa de estudio debe ser uno de los 11 programas oficiales del catálogo institucional.",
+        )
+    resultado = await db.execute(
+        select(ProgramaEstudio).where(ProgramaEstudio.id == oficial["id"])
+    )
+    canonico = resultado.scalar_one_or_none()
+    existentes = (await db.execute(select(ProgramaEstudio))).scalars().all()
+    for programa in existentes:
+        if programa.id == oficial["id"]:
+            continue
+        if programa.codigo and programa.codigo.strip().upper() == oficial["codigo"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"El código '{oficial['codigo']}' ya está asignado a otro identificador.",
+            )
+        if _normalizar_nombre_programa(programa.nombre) == _normalizar_nombre_programa(oficial["nombre"]):
+            raise HTTPException(
+                status_code=400,
+                detail="Ya existe otra carrera con el mismo nombre en el catálogo institucional.",
+            )
+    return oficial, canonico
+
+
+def _aplicar_programa_oficial(programa, oficial, datos):
+    for campo, valor in datos.items():
+        setattr(programa, campo, valor)
+    programa.id = oficial["id"]
+    programa.nombre = oficial["nombre"]
+    programa.codigo = oficial["codigo"]
 
 
 # Schemas Pydantic
@@ -125,19 +162,18 @@ async def health_check():
 # Endpoints CRUD
 @router.post("/programas", response_model=ProgramaResponse, status_code=status.HTTP_201_CREATED)
 async def crear_programa(programa: ProgramaCreate, request: Request, db: AsyncSession = Depends(get_db)):
-    codigo_norm = programa.codigo.strip().upper()
-    nombre_norm = _normalizar_nombre_programa(programa.nombre)
+    oficial, existente = await _resolver_programa_oficial(db, programa.nombre, programa.codigo)
+    datos = programa.model_dump()
+    datos["estado"] = "activo"
 
-    all_existentes = (await db.execute(select(ProgramaEstudio))).scalars().all()
-    for p in all_existentes:
-        if p.codigo and p.codigo.strip().upper() == codigo_norm:
-            raise HTTPException(status_code=400, detail=f"Ya existe un programa de estudio con el código '{programa.codigo}'")
-        if _normalizar_nombre_programa(p.nombre) == nombre_norm:
-            raise HTTPException(status_code=400, detail=f"El programa de estudio '{programa.nombre}' ya existe en el catálogo institucional")
-
-    db_programa = ProgramaEstudio(**programa.model_dump())
-    db.add(db_programa)
-    await db.flush() # Para obtener ID antes de crear el outbox
+    if existente is not None:
+        _aplicar_programa_oficial(existente, oficial, datos)
+        db_programa = existente
+    else:
+        db_programa = ProgramaEstudio(**datos)
+        _aplicar_programa_oficial(db_programa, oficial, datos)
+        db.add(db_programa)
+    await db.flush()
 
     request_id = request.headers.get("X-Request-ID", "unknown")
     event = OutboxEvent(
@@ -168,32 +204,25 @@ async def sincronizar_programa_plan(
     if not payload.modulos:
         raise HTTPException(status_code=400, detail="El plan debe incluir al menos un módulo.")
 
-    existentes = (await db.execute(select(ProgramaEstudio))).scalars().all()
-    por_codigo = next(
-        (p for p in existentes if p.codigo and p.codigo.strip().upper() == codigo),
-        None,
-    )
-    por_nombre = next(
-        (p for p in existentes if _normalizar_nombre_programa(p.nombre) == _normalizar_nombre_programa(nombre)),
-        None,
-    )
-    programa = por_codigo or por_nombre
+    oficial, programa = await _resolver_programa_oficial(db, nombre, codigo)
     creado = programa is None
 
     if creado:
         programa = ProgramaEstudio(
-            nombre=nombre,
-            codigo=codigo,
-            descripcion=payload.descripcion,
+            nombre=oficial["nombre"],
+            codigo=oficial["codigo"],
+            descripcion=payload.descripcion or f"Código MINEDU: {codigo}",
             duracion_periodos=payload.duracion_periodos,
             creditos_totales=payload.creditos_totales,
             plan_estudio_id=payload.plan_estudio_id,
+            estado="activo",
         )
+        programa.id = oficial["id"]
         db.add(programa)
         await db.flush()
     else:
-        if por_codigo is not None:
-            programa.nombre = nombre
+        programa.nombre = oficial["nombre"]
+        programa.codigo = oficial["codigo"]
         programa.descripcion = payload.descripcion or programa.descripcion
         programa.duracion_periodos = payload.duracion_periodos
         programa.creditos_totales = payload.creditos_totales
@@ -394,51 +423,8 @@ async def eliminar_programa(programa_id: int, request: Request, db: AsyncSession
     if not db_programa:
         raise HTTPException(status_code=404, detail="Programa no encontrado")
 
-    # Verificar si hay estudiantes vinculados
-    res_estudiantes = await db.execute(
-        select(func.count()).select_from(text("estudiantes")).where(text("programa_id = :pid")),
-        {"pid": programa_id}
-    )
-    total_estudiantes = res_estudiantes.scalar() or 0
-    if total_estudiantes > 0:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"No se puede eliminar el programa porque tiene {total_estudiantes} estudiantes asociados. Si ya no se oferta, se recomienda cambiar su estado a 'Inactivo' o 'En liquidación'."
-        )
+    db_programa.estado = "inactivo"
 
-    # Eliminar configuraciones asociadas
-    await db.execute(
-        delete(ProgramaConfiguracion).where(ProgramaConfiguracion.programa_id == programa_id)
-    )
-
-    # Eliminar requisitos asociados
-    await db.execute(
-        delete(ProgramaRequisito).where(ProgramaRequisito.programa_id == programa_id)
-    )
-
-    # Eliminar unidades de los módulos del programa
-    res_modulos = await db.execute(
-        select(ProgramaModulo.id).where(ProgramaModulo.programa_id == programa_id)
-    )
-    modulo_ids = res_modulos.scalars().all()
-    if modulo_ids:
-        await db.execute(
-            delete(ProgramaUnidad).where(ProgramaUnidad.programa_modulo_id.in_(modulo_ids))
-        )
-        await db.execute(
-            delete(ProgramaModulo).where(ProgramaModulo.id.in_(modulo_ids))
-        )
-
-    # Eliminar tutorías, horarios, planes docentes y cargas si existieran
-    await db.execute(text("DELETE FROM tutorias WHERE programa_id = :pid"), {"pid": programa_id})
-    await db.execute(text("DELETE FROM horarios_periodo WHERE programa_id = :pid"), {"pid": programa_id})
-    await db.execute(text("DELETE FROM planes_trabajo_docente WHERE programa_id = :pid"), {"pid": programa_id})
-    await db.execute(text("DELETE FROM carga_lectiva WHERE programa_id = :pid"), {"pid": programa_id})
-
-    # Eliminar el programa
-    await db.delete(db_programa)
-
-    # Registrar evento en outbox
     request_id = request.headers.get("X-Request-ID", "unknown")
     event = OutboxEvent(
         event_type="carrera.eliminada",
@@ -452,7 +438,7 @@ async def eliminar_programa(programa_id: int, request: Request, db: AsyncSession
     db.add(event)
     await db.commit()
 
-    return {"message": "Programa de estudio eliminado exitosamente", "id": programa_id}
+    return {"message": "Programa de estudio desactivado exitosamente", "id": programa_id}
 
 class ProgramaConfiguracionCreate(BaseModel):
     periodo_academico: Optional[int] = 1
@@ -613,17 +599,6 @@ async def obtener_malla(programa_id: int, db: AsyncSession = Depends(get_db)):
         })
 
     return malla
-
-@router.delete("/programas/{programa_id}")
-async def eliminar_programa(programa_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(ProgramaEstudio).where(ProgramaEstudio.id == programa_id))
-    programa = result.scalar_one_or_none()
-    if not programa:
-        raise HTTPException(status_code=404, detail="Programa no encontrado")
-
-    programa.estado = "inactivo"
-    await db.commit()
-    return {"message": "Programa eliminado correctamente"}
 
 # --- Schemas Coordinación (Carga Lectiva y Horarios) ---
 class CargaLectivaBase(BaseModel):
