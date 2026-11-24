@@ -82,6 +82,7 @@ export function FinancesDashboard() {
   const [payingStatement, setPayingStatement] = useState(null);
   const [payingConceptId, setPayingConceptId] = useState(null);
   const [dossierStatement, setDossierStatement] = useState(null);
+  const [dossierError, setDossierError] = useState('');
   const [viewingReceipt, setViewingReceipt] = useState(null);
   const [selectedStudentForDossier, setSelectedStudentForDossier] = useState(null);
   const [showAnnualModal, setShowAnnualModal] = useState(false);
@@ -125,8 +126,8 @@ export function FinancesDashboard() {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (!res.ok) {
-        console.error("Error fetching students:", await res.text());
         setStudents([]);
+        setDataError(`No se pudieron cargar los estudiantes (HTTP ${res.status}).`);
         return;
       }
       const data = await res.json();
@@ -138,6 +139,7 @@ export function FinancesDashboard() {
     } catch (e) {
       console.error('Error al obtener estudiantes:', e);
       setStudents([]);
+      setDataError(`No se pudieron cargar los estudiantes: ${e.message}`);
     } finally {
       setLoading(false);
     }
@@ -180,22 +182,33 @@ export function FinancesDashboard() {
   const dossierStudentId = selectedStudentForDossier?.id;
   useEffect(() => {
     if (!dossierStudentId) {
-      queueMicrotask(() => setDossierStatement(null));
+      queueMicrotask(() => {
+        setDossierStatement(null);
+        setDossierError('');
+      });
       return undefined;
     }
-    let cancelled = false;
-    tesoreriaApi.estadoCuenta(dossierStudentId)
-      .then(statement => { if (!cancelled) setDossierStatement(statement); })
-      .catch(e => { if (!cancelled) setDataError(`No se pudo cargar el estado de cuenta: ${e.message}`); });
-    return () => { cancelled = true; };
+    const controller = new AbortController();
+    queueMicrotask(() => setDossierError(''));
+    tesoreriaApi.estadoCuenta(dossierStudentId, controller.signal)
+      .then(statement => setDossierStatement(statement))
+      .catch(e => {
+        if (e.name === 'AbortError') return;
+        setDossierStatement(null);
+        setDossierError(`No se pudo cargar el estado de cuenta: ${e.message}`);
+        setDataError(`No se pudo cargar el estado de cuenta: ${e.message}`);
+      });
+    return () => controller.abort();
   }, [dossierStudentId, transactions, catalog]);
 
   // Métricas Financieras en Vivo
   const financialStats = useMemo(() => {
-    const totalEstudiantes = students.length || 1;
+    const totalEstudiantes = students.length;
     const estudiantesHabilitados = students.filter(s => s.pago_matricula).length;
     const estudiantesConDeuda = totalEstudiantes - estudiantesHabilitados;
-    const porcentajeHabilitados = Math.round((estudiantesHabilitados / totalEstudiantes) * 100);
+    const porcentajeHabilitados = totalEstudiantes
+      ? Math.round((estudiantesHabilitados / totalEstudiantes) * 100)
+      : 0;
 
     // Suma total recaudada desde los recibos de caja
     const totalRecaudado = transactions.reduce((acc, t) => acc + (parseFloat(t.monto) || 0), 0);
@@ -245,10 +258,11 @@ export function FinancesDashboard() {
   }, [searchTerm, filterCareer, viewMode]);
 
   const totalPages = Math.ceil(filteredStudents.length / itemsPerPage) || 1;
+  const safePage = Math.min(currentPage, totalPages);
   const paginatedStudents = useMemo(() => {
-    const start = (currentPage - 1) * itemsPerPage;
+    const start = (safePage - 1) * itemsPerPage;
     return filteredStudents.slice(start, start + itemsPerPage);
-  }, [filteredStudents, currentPage, itemsPerPage]);
+  }, [filteredStudents, safePage, itemsPerPage]);
 
   // Filtro de Transacciones para el Libro Diario
   const matchesHistoryFilters = (t) => {
@@ -927,19 +941,19 @@ export function FinancesDashboard() {
           {totalPages > 1 && (
             <div className="flex items-center justify-between pt-4 border-t border-slate-200">
               <span className="text-xs text-slate-500">
-                Página <strong className="text-slate-800">{currentPage}</strong> de {totalPages}
+                Página <strong className="text-slate-800">{safePage}</strong> de {totalPages}
               </span>
               <div className="flex items-center gap-1">
                 <button
-                  disabled={currentPage === 1}
-                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                  disabled={safePage === 1}
+                  onClick={() => setCurrentPage(Math.max(1, safePage - 1))}
                   className="p-2 rounded-lg border border-slate-200 hover:bg-slate-100 disabled:opacity-40 transition cursor-pointer"
                 >
                   <ChevronLeft size={16} />
                 </button>
                 <button
-                  disabled={currentPage === totalPages}
-                  onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                  disabled={safePage === totalPages}
+                  onClick={() => setCurrentPage(Math.min(totalPages, safePage + 1))}
                   className="p-2 rounded-lg border border-slate-200 hover:bg-slate-100 disabled:opacity-40 transition cursor-pointer"
                 >
                   <ChevronRight size={16} />
@@ -1137,10 +1151,13 @@ export function FinancesDashboard() {
                 Descargar Libro Diario (Excel)
               </button>
               <button
-                onClick={() => toast.success(`Arqueo conforme registrado con éxito. Total recaudado: S/ ${arqueoPorMetodo.total.toFixed(2)}. Comprobantes emitidos: ${transactions.length}`)}
+                onClick={() => {
+                  handleExportExcel();
+                  toast.success(`Arqueo descargado. Total: S/ ${arqueoPorMetodo.total.toFixed(2)} · ${transactions.length} comprobantes.`);
+                }}
                 className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-600/25 transition cursor-pointer"
               >
-                Cierre de Turno y Arqueo Conforme
+                Descargar Arqueo del Turno
               </button>
             </div>
           </div>
@@ -1167,7 +1184,7 @@ export function FinancesDashboard() {
           student={selectedStudentForDossier}
           payments={selectedStudentPayments}
           habilitado={dossierHabilitado}
-          loading={!statementMatchesDossier}
+          loading={!statementMatchesDossier && !dossierError}
           blocked={showAnnualModal || !!payingStudent || !!viewingReceipt}
           cashierName={user?.full_name || 'Caja Central'}
           catalog={catalog}

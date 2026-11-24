@@ -105,28 +105,31 @@ export function StudentDetail({ student, onClose }) {
   const [convalidaciones, setConvalidaciones] = useState([]);
   const [tramites, setTramites] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState('expediente');
   const [now, setNow] = useState(null);
 
   useEffect(() => {
-    if (!student?.id) return;
-    let cancelled = false;
+    if (!student?.id) return undefined;
+    const controller = new AbortController();
 
     async function fetchAll() {
       setLoading(true);
+      setError('');
       const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` };
+      const options = { headers, signal: controller.signal };
       const base = `${API_BASE}/api/mod-gestion-academica`;
 
       try {
         const [detailRes, matRes, benRes, convRes, tramRes] = await Promise.allSettled([
-          fetch(`${base}/estudiantes/${student.id}`, { headers }),
-          fetch(`${base}/matriculas/estudiante/${student.id}`, { headers }),
-          fetch(`${base}/beneficios/estudiante/${student.id}`, { headers }),
-          fetch(`${base}/convalidaciones/estudiante/${student.id}`, { headers }),
-          fetch(`${base}/tramites/`, { headers }),
+          fetch(`${base}/estudiantes/${student.id}`, options),
+          fetch(`${base}/matriculas/estudiante/${student.id}`, options),
+          fetch(`${base}/beneficios/estudiante/${student.id}`, options),
+          fetch(`${base}/convalidaciones/estudiante/${student.id}`, options),
+          fetch(`${base}/tramites/`, options),
         ]);
 
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
 
         if (detailRes.status === 'fulfilled' && detailRes.value.ok) {
           setDetail(await detailRes.value.json());
@@ -155,15 +158,18 @@ export function StudentDetail({ student, onClose }) {
             setTramites(allTramites.filter(t => t.estudiante_id === student.id));
           }
         }
-      } catch {
-        setDetail(student);
+      } catch (e) {
+        if (e.name !== 'AbortError') {
+          setDetail(student);
+          setError('No se pudo cargar toda la información del estudiante.');
+        }
       }
 
-      if (!cancelled) setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
 
     fetchAll();
-    return () => { cancelled = true; };
+    return () => controller.abort();
   }, [student]);
 
   useEffect(() => {
@@ -259,6 +265,7 @@ export function StudentDetail({ student, onClose }) {
   return createPortal(
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
       <div className="w-full max-w-4xl lg:max-w-5xl overflow-hidden flex flex-col max-h-[92vh] bg-white shadow-2xl rounded-2xl sm:rounded-3xl border-2 border-slate-200">
+        {error && <div className="px-5 py-2 text-sm text-rose-700 bg-rose-50 border-b border-rose-200">{error}</div>}
 
         {/* Cabecera Hero con tech-bg degradado */}
         <div className="relative overflow-hidden border-b border-slate-200 bg-gradient-to-r from-primary-dark via-primary to-secondary shrink-0">

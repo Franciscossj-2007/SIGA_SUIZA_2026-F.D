@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { apiClient, API_BASE } from '../../core/api/client';
+import { PROGRAMAS } from '../../core/catalog/programas';
 
 export default function ExtraordinaryEnrollmentModal({ isOpen, onClose, onSuccess, currentPrograma, userRole }) {
   const [formData, setFormData] = useState({
@@ -8,7 +9,7 @@ export default function ExtraordinaryEnrollmentModal({ isOpen, onClose, onSucces
     nombres: '',
     apellidos: '',
     codigo_estudiante: '',
-    programa_id: currentPrograma === 'ALL' ? '1' : currentPrograma
+    programa_id: currentPrograma === 'ALL' ? '' : currentPrograma
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -17,13 +18,36 @@ export default function ExtraordinaryEnrollmentModal({ isOpen, onClose, onSucces
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true);
     setError(null);
+
+    const dni = String(formData.dni || '').trim();
+    const nombres = String(formData.nombres || '').trim();
+    const apellidos = String(formData.apellidos || '').trim();
+    const codigo_estudiante = String(formData.codigo_estudiante || '').trim();
+
+    if (!/^\d{8}$/.test(dni)) {
+      setError('El DNI debe tener exactamente 8 dígitos.');
+      return;
+    }
+    if (!nombres || !apellidos || !codigo_estudiante) {
+      setError('Nombres, apellidos y código son campos obligatorios.');
+      return;
+    }
+    if (!formData.programa_id) {
+      setError('Seleccione un programa de estudio.');
+      return;
+    }
+
+    setLoading(true);
 
     try {
       // 1. Create the student
       const studentPayload = {
         ...formData,
+        dni,
+        nombres,
+        apellidos,
+        codigo_estudiante,
         programa_id: parseInt(formData.programa_id),
         modalidad_admision: 'MIGRACION_HISTORICA',
         estado_academico: 'estudiante'
@@ -91,7 +115,9 @@ export default function ExtraordinaryEnrollmentModal({ isOpen, onClose, onSucces
                 <input 
                   type="text" 
                   required 
+                  minLength={8}
                   maxLength={8}
+                  pattern="\d{8}"
                   placeholder="Ej. 76543210"
                   className="w-full pl-10 bg-slate-50 border border-slate-200 rounded-xl py-2.5 text-sm font-medium text-slate-800 placeholder-slate-400 focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none"
                   value={formData.dni}
@@ -152,12 +178,10 @@ export default function ExtraordinaryEnrollmentModal({ isOpen, onClose, onSucces
                 value={formData.programa_id}
                 onChange={e => setFormData({...formData, programa_id: e.target.value})}
               >
-                <option value="1">Arquitectura de Plataformas y Servicios T.I.</option>
-                <option value="2">Enfermería Técnica</option>
-                <option value="3">Diseño Gráfico</option>
-                <option value="4">Administración</option>
-                <option value="5">Contabilidad</option>
-                <option value="6">Mecatrónica</option>
+                <option value="">Seleccione una carrera...</option>
+                {PROGRAMAS.filter(p => p.id !== 'ALL').map(p => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
               </select>
             </div>
           )}

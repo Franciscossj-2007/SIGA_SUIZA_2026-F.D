@@ -187,7 +187,10 @@ export function EnrollmentProcess({ initialStudent, onCancel }) {
     }
   };
 
+  const bloqueadasMap = new Map((propuesta?.bloqueadas || []).map(u => [u.unidad_didactica_id, u.motivo]));
+
   const toggleUD = (udId) => {
+    if (bloqueadasMap.has(Number(udId))) return;
     setSelectedUDs(prev => ({ ...prev, [udId]: !prev[udId] }));
   };
 
@@ -195,15 +198,14 @@ export function EnrollmentProcess({ initialStudent, onCancel }) {
     const newSelection = { ...selectedUDs };
     const modulo = malla.find(m => m.periodo === periodoIndex);
     if (modulo) {
-      modulo.unidades.forEach(u => newSelection[u.id] = true);
+      modulo.unidades.forEach(u => {
+        if (!bloqueadasMap.has(u.id)) newSelection[u.id] = true;
+      });
     }
     setSelectedUDs(newSelection);
   };
 
   const uncheckAll = () => setSelectedUDs({});
-
-  // UDs bloqueadas por el motor (prerrequisito / tercera vez), con su motivo.
-  const bloqueadasMap = new Map((propuesta?.bloqueadas || []).map(u => [u.unidad_didactica_id, u.motivo]));
 
   const handleEnroll = async () => {
     setLoading(true);
@@ -213,17 +215,15 @@ export function EnrollmentProcess({ initialStudent, onCancel }) {
         .filter(id => selectedUDs[id] && !bloqueadasMap.has(Number(id)))
         .map(Number);
       
-      // Buscar los créditos para cada UD
-      const detalles = [];
-      malla.forEach(m => {
-        m.unidades.forEach(u => {
-          if (udIds.includes(u.id)) {
-            detalles.push({ unidad_didactica_id: u.id, creditos: u.creditos });
-          }
-        });
+      const unidadesMalla = malla.flatMap(m => m.unidades);
+      const detalles = udIds.map(id => {
+        const ud = unidadesMalla.find(u => u.id === id);
+        if (!ud) throw new Error('Una unidad seleccionada no pertenece a la malla vigente');
+        const creditos = Number(ud.creditos);
+        if (!Number.isFinite(creditos) || creditos <= 0) throw new Error(`La unidad ${ud.nombre || id} no tiene créditos válidos`);
+        return { unidad_didactica_id: ud.id, creditos };
       });
 
-      // Validar si hay créditos (MVP hack para evitar crasheos)
       if (detalles.length === 0) {
         throw new Error("No hay unidades didácticas seleccionadas");
       }
@@ -570,7 +570,7 @@ export function EnrollmentProcess({ initialStudent, onCancel }) {
                       <p className="text-xs text-slate-500 text-center">Escanea el QR para validar la matrícula en tiempo real (alumno / secretaría).</p>
                     </>
                   ) : (
-                    <p className="text-sm text-slate-400">Boleta no disponible.</p>
+                    <p className="text-sm text-slate-400">La boleta y el código QR se emiten desde Finanzas y Pagos.</p>
                   )}
                 </div>
 

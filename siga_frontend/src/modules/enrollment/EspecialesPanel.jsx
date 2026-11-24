@@ -24,10 +24,10 @@ export function EspecialesPanel() {
 
   const [casuistica, setCasuistica] = useState('Reingresante');
   const [flags, setFlags] = useState({
-    dejo_institucion_antes_ciclo: true,
-    no_supero_max_ciclos: true,
-    solicitud_en_plazo: true,
-    tasa_pagada: true,
+    dejo_institucion_antes_ciclo: false,
+    no_supero_max_ciclos: false,
+    solicitud_en_plazo: false,
+    tasa_pagada: false,
   });
 
   const [resultado, setResultado] = useState(null);

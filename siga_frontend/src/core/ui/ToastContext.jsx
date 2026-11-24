@@ -128,7 +128,7 @@ export function ToastProvider({ children }) {
 
     window.prompt = (message) => {
       console.warn('Native window.prompt was intercepted and blocked:', message);
-      addToast({ type: 'warning', title: 'Aviso del Sistema', message: typeof message === 'string' ? message : 'Entrada bloqueada' });
+      addToast('warning', typeof message === 'string' ? message : 'Entrada bloqueada');
       return null;
     };
 

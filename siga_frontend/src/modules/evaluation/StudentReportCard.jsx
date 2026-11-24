@@ -455,7 +455,8 @@ export function StudentReportCard() {
   const { user, openPasswordModal } = useAuth();
   const userRoles = user?.roles ? user.roles.map(r => typeof r === 'string' ? r : r.nombre || r.name) : [];
   const primaryRole = user?.is_superuser ? 'superadmin' : (userRoles.length > 0 ? userRoles[0] : (user?.role || 'invitado'));
-  const isAdmin = primaryRole !== 'estudiante';
+  const rolesConAcceso = ['admin', 'superadmin', 'director', 'coordinador_academico', 'secretaria_academica', 'registro', 'evaluacion'];
+  const isAdmin = rolesConAcceso.includes(primaryRole) || user?.is_superuser === true;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -470,6 +471,7 @@ export function StudentReportCard() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const searchRef = useRef(null);
+  const studentsAbortRef = useRef(null);
 
   const [busquedaCursos, setBusquedaCursos] = useState('');
   const [filtroEstado, setFiltroEstado] = useState('todos');
@@ -482,22 +484,30 @@ export function StudentReportCard() {
   });
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!isAdmin) return undefined;
+    const controller = new AbortController();
+    studentsAbortRef.current = controller;
     const fetchStudents = async () => {
       setSearchLoading(true);
       try {
         const res = await fetch(`${API_BASE}/api/mod-gestion-academica/estudiantes/`, {
-          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+          signal: controller.signal
         });
-        const dbData = res.ok ? await res.json() : [];
+        if (!res.ok) throw new Error(`Error ${res.status}`);
+        const dbData = await res.json();
         setAllStudents(Array.isArray(dbData) ? dbData : []);
       } catch (e) {
-        console.error('Error fetching students', e);
-        setAllStudents([]);
+        if (e.name !== 'AbortError') {
+          console.error('Error fetching students', e);
+          setAllStudents([]);
+        }
+      } finally {
+        if (!controller.signal.aborted) setSearchLoading(false);
       }
-      setSearchLoading(false);
     };
     fetchStudents();
+    return () => controller.abort();
   }, [isAdmin]);
 
   useEffect(() => {

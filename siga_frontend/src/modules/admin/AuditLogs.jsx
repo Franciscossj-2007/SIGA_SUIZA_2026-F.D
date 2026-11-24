@@ -5,6 +5,8 @@ import { FileText, RefreshCw, ChevronDown, ScrollText } from 'lucide-react';
 export function AuditLogs() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [eventTypeDraft, setEventTypeDraft] = useState('');
   const [filters, setFilters] = useState({
     source: '',
     event_type: ''
@@ -15,19 +17,29 @@ export function AuditLogs() {
     try {
       let url = `${API_BASE}/api/mod-auditoria/api/v1/auditoria?limit=50`;
       if (filters.source) url += `&source=${filters.source}`;
-      if (filters.event_type) url += `&event_type=${filters.event_type}`;
-      
+      if (filters.event_type) url += `&event_type=${encodeURIComponent(filters.event_type)}`;
+
       const res = await fetch(url, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
-      if (res.ok) {
-        setLogs(await res.json());
-      }
+      if (!res.ok) throw new Error(`Error ${res.status}`);
+      const data = await res.json();
+      setLogs(Array.isArray(data) ? data : []);
+      setError('');
     } catch (e) {
       console.error(e);
+      setLogs([]);
+      setError('No se pudo cargar la auditoría.');
     }
     setLoading(false);
   }, [filters]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setFilters(prev => (prev.event_type === eventTypeDraft ? prev : { ...prev, event_type: eventTypeDraft }));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [eventTypeDraft]);
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -64,8 +76,8 @@ export function AuditLogs() {
             type="text" 
             className="input-field" 
             placeholder="Ej. gestion_academica.estudiante.creado"
-            value={filters.event_type}
-            onChange={(e) => setFilters({...filters, event_type: e.target.value})}
+            value={eventTypeDraft}
+            onChange={(e) => setEventTypeDraft(e.target.value)}
           />
         </div>
         <div className="w-full md:w-auto">
@@ -78,6 +90,8 @@ export function AuditLogs() {
           </button>
         </div>
       </div>
+
+      {error && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-4 py-3">{error}</div>}
 
       <div className="glass-card overflow-hidden">
         <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-white/40">

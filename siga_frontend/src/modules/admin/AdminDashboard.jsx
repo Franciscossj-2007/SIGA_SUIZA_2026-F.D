@@ -13,6 +13,7 @@ export function AdminDashboard({ onNavigate }) {
   const [modules, setModules] = useState([]);
   const [activeTab, setActiveTab] = useState('overview');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
     const loadData = async () => {
@@ -25,6 +26,7 @@ export function AdminDashboard({ onNavigate }) {
         setModules(modulesData?.modules || []);
       } catch (error) {
         console.error('Error loading admin data:', error);
+        setLoadError('No se pudo cargar el estado del sistema. Algunos datos pueden estar desactualizados.');
       } finally {
         setLoading(false);
       }
@@ -32,7 +34,7 @@ export function AdminDashboard({ onNavigate }) {
     loadData();
   }, []);
 
-  const isAdmin = user?.is_superuser || permissions.includes('core:user:manage');
+  const isAdmin = user?.is_superuser || permissions?.includes('core:user:manage');
 
   if (!isAdmin) {
     return (
@@ -57,6 +59,11 @@ export function AdminDashboard({ onNavigate }) {
 
   const renderOverview = () => (
     <div className="space-y-6 animate-fade-in">
+      {loadError && (
+        <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-4 py-3">
+          {loadError}
+        </div>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="glass-card p-6 text-center transform hover:-translate-y-1 transition-all">
           <div className="text-slate-500 text-sm font-medium uppercase tracking-wider mb-2">Estado del Core</div>

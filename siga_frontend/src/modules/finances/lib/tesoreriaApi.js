@@ -3,9 +3,10 @@ import { API_BASE } from '../../../core/api/client';
 
 const BASE = `${API_BASE}/api/mod-gestion-academica/tesoreria`;
 
-async function request(path, { method = 'GET', body } = {}) {
+async function request(path, { method = 'GET', body, signal } = {}) {
   const res = await fetch(`${BASE}${path}`, {
     method,
+    signal,
     headers: {
       Authorization: `Bearer ${localStorage.getItem('token')}`,
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
@@ -50,7 +51,7 @@ export const tesoreriaApi = {
 
   listarPagos: () => request('/pagos'),
   registrarPago: (payload) => request('/pagos', { method: 'POST', body: payload }),
-  estadoCuenta: (estudianteId) => request(`/estudiantes/${estudianteId}/estado-cuenta`),
+  estadoCuenta: (estudianteId, signal) => request(`/estudiantes/${estudianteId}/estado-cuenta`, { signal }),
 
   importar: (payload) => request('/importar', { method: 'POST', body: payload }),
 };

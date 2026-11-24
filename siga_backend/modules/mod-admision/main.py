@@ -220,9 +220,9 @@ def _procesar_filas(df, columnas, modalidad_por_defecto, resumen, dnis_vistos):
             resumen["omitidas"] += 1
             resumen["errores"].append(f"Fila {numero}: DNI vacío o inválido.")
             continue
-        if not (5 <= len(dni) <= 12):
+        if not re.fullmatch(r"\d{8}", dni):
             resumen["omitidas"] += 1
-            resumen["errores"].append(f"Fila {numero}: DNI inválido {dni!r}.")
+            resumen["errores"].append(f"Fila {numero}: DNI inválido {dni!r}. Debe tener 8 dígitos.")
             continue
         if dni in dnis_vistos:
             resumen["omitidas"] += 1

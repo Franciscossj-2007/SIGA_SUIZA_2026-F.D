@@ -69,12 +69,15 @@ export function AdmissionModule() {
       
       if (res.ok) {
         const resumen = data.resumen || {};
+        const filasLeidas = data.filas_leadas ?? resumen.filas_leadas;
+        const procesados = data.procesados ?? resumen.procesados ?? 0;
+        const errores = data.errores ?? resumen.errores;
         const texto = [
           data.message || 'Archivo procesado con éxito.',
-          `${data.procesados ?? 0} ingresantes registrados.`,
-          resumen.filas_leidas ? `Filas leídas: ${resumen.filas_leidas}.` : '',
-          Array.isArray(resumen.errores) && resumen.errores.length
-            ? `Errores: ${resumen.errores.length}.`
+          `${procesados} ingresantes registrados.`,
+          filasLeidas ? `Filas leídas: ${filasLeidas}.` : '',
+          Array.isArray(errores) && errores.length
+            ? `Errores: ${errores.length}.`
             : '',
         ].filter(Boolean).join(' ');
         setMessage({ text: texto, type: 'success' });

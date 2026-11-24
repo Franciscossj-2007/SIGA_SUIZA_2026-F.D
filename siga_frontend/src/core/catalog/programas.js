@@ -11,6 +11,7 @@ export const PROGRAMAS = [
   { id: '9', codigo: 'MAN-FOR', label: 'Manejo Forestal' },
   { id: '10', codigo: 'MET', label: 'Mecatrónica Automotriz' },
   { id: '11', codigo: 'PRO-AG', label: 'Producción Agropecuaria' },
+  { id: '12', codigo: 'G2145-3-001', label: 'Mecatrónica automotriz' },
 ];
 
 export const PROGRAMAS_OPTIONS = [

@@ -37,9 +37,36 @@ export function PeriodManager({ onClose, onUpdate }) {
 
   const handleCreate = async (e) => {
     e.preventDefault();
+    const codigo = (newPeriod.codigo || '').trim();
+    const inicio = newPeriod.fecha_inicio;
+    const fin = newPeriod.fecha_fin;
+    const regular = newPeriod.fecha_fin_matricula_regular;
+    const extemporanea = newPeriod.fecha_fin_matricula_extemporanea;
+
+    if (!codigo) {
+      toast.error('El código del periodo es obligatorio.');
+      return;
+    }
+    if (!inicio || !fin || !regular || !extemporanea) {
+      toast.error('Todas las fechas del periodo son obligatorias.');
+      return;
+    }
+    if (fin <= inicio) {
+      toast.error('La fecha de fin debe ser posterior a la fecha de inicio.');
+      return;
+    }
+    if (regular < inicio || regular > fin || extemporanea < inicio || extemporanea > fin) {
+      toast.error('Los cierres de matrícula deben estar dentro del rango del periodo.');
+      return;
+    }
+    if (extemporanea < regular) {
+      toast.error('El cierre extemporáneo no puede ser anterior al cierre regular.');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      await apiClient.callModule('mod-programas-estudio', 'periodos', 'POST', newPeriod);
+      await apiClient.callModule('mod-programas-estudio', 'periodos', 'POST', { ...newPeriod, codigo });
       setNewPeriod({ codigo: '', fecha_inicio: '', fecha_fin: '', fecha_fin_matricula_regular: '', fecha_fin_matricula_extemporanea: '', estado: 'planificacion' });
       fetchPeriods();
       if (onUpdate) onUpdate();

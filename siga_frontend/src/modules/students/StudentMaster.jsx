@@ -421,6 +421,19 @@ const normalizarBusqueda = (valor) => String(valor ?? '')
   .trim()
   .toLowerCase();
 
+const ESTADOS_ESTUDIANTE_VIGENTE = new Set([
+  'postulante',
+  'ingresante',
+  'matriculado',
+  'regular',
+  'estudiante',
+  'reingreso',
+  'vigente',
+  'activo',
+]);
+
+const esEstudianteVigente = (estudiante) => ESTADOS_ESTUDIANTE_VIGENTE.has(normalizarBusqueda(estudiante?.estado_academico));
+
 const compareStudentsByCarrera = (a, b) => {
   const carreraA = a.programa_id ? getProgramaLabel(a.programa_id) : '';
   const carreraB = b.programa_id ? getProgramaLabel(b.programa_id) : '';
@@ -475,11 +488,6 @@ function ProgramaFilter({ value, onChange, programas = [] }) {
           <span className="block text-[10px] font-bold uppercase tracking-wider text-primary/70 leading-none mb-1">Programa de Estudio</span>
           <span className="block text-sm font-bold text-slate-text truncate">{selected.label}</span>
         </span>
-        {!isAll && (
-          <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-md bg-primary text-white text-[10px] font-bold shadow-sm shadow-primary/40">
-            {selected.id}
-          </span>
-        )}
         <ChevronDown size={18} className={`flex-shrink-0 text-primary transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
       </button>
 
@@ -532,6 +540,8 @@ export function StudentMaster() {
   const [wizardStep, setWizardStep] = useState(1);
   const searchTermRef = useRef('');
   const searchRequestRef = useRef(0);
+  const searchAbortRef = useRef(null);
+  const searchTimerRef = useRef(null);
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [currentPrograma, setCurrentPrograma] = useState('ALL');
   const [stepDir, setStepDir] = useState('forward');
@@ -654,6 +664,9 @@ export function StudentMaster() {
 
   const handleSearch = useCallback(async (val = '', programa = programaActivo) => {
     const requestId = ++searchRequestRef.current;
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
     setSearchTerm(val);
     searchTermRef.current = val;
     setCurrentPage(1);
@@ -667,7 +680,8 @@ export function StudentMaster() {
       }
 
       const res = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        signal: controller.signal
       });
 
       if (!res.ok) {
@@ -698,7 +712,7 @@ export function StudentMaster() {
       const data = await res.json();
       if (requestId !== searchRequestRef.current) return;
       const dataArray = Array.isArray(data) ? data : [];
-      const sorted = [...dataArray].sort(compareStudentsByCarrera);
+      const sorted = dataArray.filter(esEstudianteVigente).sort(compareStudentsByCarrera);
 
       const term = normalizarBusqueda(val);
       if (term) {
@@ -717,8 +731,8 @@ export function StudentMaster() {
         setStudents(sorted);
       }
     } catch (e) {
+      if (e?.name === 'AbortError' || requestId !== searchRequestRef.current) return;
       console.error(e);
-      if (requestId !== searchRequestRef.current) return;
       setStudents([]);
       setLoadError('No se pudo conectar con el servidor. Verifique que el backend este levantado.');
     } finally {
@@ -726,17 +740,37 @@ export function StudentMaster() {
     }
   }, [programaActivo]);
 
+  const handleSearchInput = (value) => {
+    setSearchTerm(value);
+    searchTermRef.current = value;
+    setCurrentPage(1);
+    clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => handleSearch(value), 250);
+  };
+
+  useEffect(() => () => {
+    clearTimeout(searchTimerRef.current);
+    searchAbortRef.current?.abort();
+  }, []);
+
   useEffect(() => {
     if (userRole === 'invitado') return undefined;
     if (userRole === 'secretaria_programa' && currentPrograma === 'ALL') {
-      const fallbackId = user?.email === 'secretaria_prog@siga.edu' ? '2' : '1';
-      const programaAsignado = user?.programa_id ? String(user.programa_id) : fallbackId;
-      queueMicrotask(() => setCurrentPrograma(programaAsignado));
+      const programaAsignado = user?.programa_id ? String(user.programa_id) : '';
+      if (programaAsignado) {
+        queueMicrotask(() => setCurrentPrograma(programaAsignado));
+      } else {
+        queueMicrotask(() => {
+          setStudents([]);
+          setLoadError('Tu usuario no tiene un programa de estudio asignado.');
+          setLoading(false);
+        });
+      }
       return undefined;
     }
     queueMicrotask(() => { handleSearch(searchTermRef.current, programaActivo); });
     return undefined;
-  }, [programaActivo, currentPrograma, userRole, handleSearch, user?.email, user?.programa_id]);
+  }, [programaActivo, currentPrograma, userRole, handleSearch, user?.programa_id]);
 
   useEffect(() => {
     if (!showModal) return undefined;
@@ -792,6 +826,24 @@ export function StudentMaster() {
   const handleCreate = async (e) => {
     e.preventDefault();
     if (submitting) return;
+
+    const dni = String(form.dni || '').trim();
+    if (!/^\d{8}$/.test(dni)) {
+      alert('El DNI debe tener exactamente 8 dígitos.');
+      return;
+    }
+    const correos = [form.email_institucional, form.email_personal]
+      .filter(Boolean)
+      .map(valor => String(valor).trim());
+    if (correos.some(correo => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correo))) {
+      alert('Ingrese un correo electrónico válido.');
+      return;
+    }
+    const celular = String(form.telefono_movil || '').trim();
+    if (celular && !/^(?:\+?51)?\d{9}$/.test(celular.replace(/\s/g, ''))) {
+      alert('El celular debe tener 9 dígitos (opcionalmente con +51).');
+      return;
+    }
 
     const firstInvalid = WIZARD_STEPS.find(step => sectorHasMissing(step.id));
     if (firstInvalid) {
@@ -1454,7 +1506,7 @@ export function StudentMaster() {
               className="w-full bg-transparent border-none focus:ring-0 focus:shadow-none p-0 text-sm font-medium text-slate-text placeholder:text-slate-400 outline-none"
               placeholder="DNI, nombre o código..."
               value={searchTerm}
-              onChange={(e) => handleSearch(e.target.value)}
+              onChange={(e) => handleSearchInput(e.target.value)}
             />
           </div>
           {loading ? (
@@ -1566,15 +1618,15 @@ export function StudentMaster() {
                       {loadError ? 'Datos no disponibles' : 'No se encontraron estudiantes'}
                     </p>
                     <p className="text-slate-500 text-xs mt-1 max-w-md mx-auto">
-                      {loadError || 'No hay estudiantes que coincidan con los criterios de búsqueda o el programa seleccionado.'}
+                      {loadError || 'No hay estudiantes vigentes o matriculados que coincidan con los criterios de búsqueda o el programa seleccionado.'}
                     </p>
                   </td>
                 </tr>
               ) : (
                 paginatedStudents.map(s => {
                   const initials = `${(s.nombres || '')[0] || ''}${(s.apellidos || '')[0] || ''}`.toUpperCase();
-                  const isPostulante = s.estado_academico === 'postulante';
-                  const isMatriculado = s.estado_academico === 'matriculado' || s.estado_academico === 'ingresante';
+                  const isPostulante = normalizarBusqueda(s.estado_academico) === 'postulante';
+                  const isMatriculado = esEstudianteVigente(s);
 
                   return (
                     <tr

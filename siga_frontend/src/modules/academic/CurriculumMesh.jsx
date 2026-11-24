@@ -2,10 +2,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { apiClient } from '../../core/api/client';
 import { useToast } from '../../core/ui/ToastContext';
+import { useConfirm } from '../../core/ui/ConfirmModal';
 import { ArrowLeft, X, Plus, Trash2, BookOpen, Clock, Layers, Sparkles, CheckCircle2 } from 'lucide-react';
 
 export function CurriculumMesh({ programId, onBack }) {
   const toast = useToast();
+  const confirm = useConfirm();
   const [malla, setMalla] = useState([]);
   const [program, setProgram] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -89,14 +91,24 @@ export function CurriculumMesh({ programId, onBack }) {
   const handleAddModule = async (e) => {
     e.preventDefault();
     if (savingModule) return;
+    const nombre = (newModule.nombre || '').trim();
+    const periodo = parseInt(newModule.periodo, 10);
+    if (!nombre) {
+      setModuleError('El nombre del módulo es obligatorio.');
+      return;
+    }
+    if (!Number.isInteger(periodo) || periodo < 1) {
+      setModuleError('El periodo debe ser un número entero mayor que cero.');
+      return;
+    }
     setSavingModule(true);
     setModuleError('');
     try {
       await apiClient.request(`/api/mod-programas-estudio/programas/${programId}/modulos`, {
         method: 'POST',
         body: JSON.stringify({
-          nombre: newModule.nombre.trim(),
-          periodo: parseInt(newModule.periodo, 10)
+          nombre,
+          periodo
         })
       });
       toast.success('Módulo creado correctamente');
@@ -117,7 +129,7 @@ export function CurriculumMesh({ programId, onBack }) {
   };
 
   const handleDeleteModule = async (moduloId, moduloNombre) => {
-    const ok = await toast.confirm({
+    const ok = await confirm({
       title: '¿Eliminar módulo formativo?',
       message: `¿Estás seguro de eliminar el módulo "${moduloNombre}" y todas sus unidades asociadas?`,
       confirmText: 'Sí, eliminar',
@@ -155,13 +167,13 @@ export function CurriculumMesh({ programId, onBack }) {
     try {
       await apiClient.request(`/api/mod-programas-estudio/modulos/${showAddUnit.moduloId}/unidades`, {
         method: 'POST',
-        data: {
+        body: JSON.stringify({
           nombre: newUnit.nombre,
           creditos: parseInt(newUnit.creditos) || 0,
           horas_teoria: parseInt(newUnit.horas_teoria) || 0,
           horas_practica: parseInt(newUnit.horas_practica) || 0,
           orden: parseInt(newUnit.orden) || 1
-        }
+        })
       });
       setShowAddUnit({ show: false, moduloId: null, moduloNombre: '' });
       toast.success('Unidad didáctica guardada exitosamente');
@@ -175,7 +187,7 @@ export function CurriculumMesh({ programId, onBack }) {
   };
 
   const handleDeleteUnit = async (unidadId, unidadNombre) => {
-    const ok = await toast.confirm({
+    const ok = await confirm({
       title: '¿Eliminar unidad didáctica?',
       message: `¿Deseas eliminar la unidad didáctica "${unidadNombre}"?`,
       confirmText: 'Eliminar unidad',

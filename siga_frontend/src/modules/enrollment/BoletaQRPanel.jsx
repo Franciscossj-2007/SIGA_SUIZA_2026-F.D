@@ -225,16 +225,29 @@ export function BoletaQRPanel() {
     await fetchFinanceBoletas(financeSearch);
   };
 
-  const selectFinanceBoleta = (boleta) => {
+  const selectFinanceBoleta = async (boleta) => {
     const identifier = boleta.codigoRecibo || boleta.qr_code || boleta.payment_id || boleta.codigo ||
       boleta.boleta_codigo || boleta.receipt_number || boleta.numero_boleta || '';
-    setShowFinanceModal(false);
-    setScannedCode(identifier);
-    setStatus('BOLETA VÁLIDA');
-    setPaymentData(boleta);
-    setCameraError('');
-    setConsultaMsg('Datos recibidos del módulo Finanzas y Pagos.');
-    setConsultando(false);
+    if (!identifier) {
+      setFinanceError('La boleta seleccionada no tiene código consultable.');
+      return;
+    }
+    setConsultando(true);
+    setFinanceError('');
+    try {
+      const datos = await getPaymentByQr(identifier);
+      setShowFinanceModal(false);
+      setScannedCode(identifier);
+      setStatus('BOLETA VÁLIDA');
+      setPaymentData(datos);
+      setCameraError('');
+      setConsultaMsg('Boleta validada contra el módulo Finanzas y Pagos.');
+    } catch (e) {
+      setStatus('BOLETA NO VÁLIDA');
+      setFinanceError(e.message || 'No se pudo validar la boleta.');
+    } finally {
+      setConsultando(false);
+    }
   };
 
   const getBoletaField = (b, keys, fallback = '-') => {

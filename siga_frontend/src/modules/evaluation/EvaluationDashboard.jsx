@@ -1,7 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 import { useState, useEffect } from 'react';
 import { apiClient } from '../../core/api/client';
-import { useToast } from '../../core/ui/ToastContext';
 import { DocentePlanning } from '../academic/DocentePlanning';
 import { useAuth } from '../../core/auth/useAuth';
 import { Save, GraduationCap, Calendar, BookOpen, ClipboardList, AlertTriangle, Target, FileText, Printer, X, CheckCircle2 } from 'lucide-react';
@@ -114,33 +113,10 @@ function mapSaveError(error) {
   return errorText;
 }
 
-function useSafeToast() {
-  try {
-    return useToast();
-  } catch {
-    const noop = () => {};
-    return {
-      toast: { success: noop, error: noop, warning: noop, info: noop, dismiss: noop, clear: noop, confirm: async () => true },
-      success: noop,
-      error: noop,
-      warning: noop,
-      info: noop,
-      showSuccess: noop,
-      showError: noop,
-      showWarning: noop,
-      showInfo: noop,
-      dismiss: noop,
-      clear: noop,
-      toasts: [],
-    };
-  }
-}
-
 export function EvaluationDashboard() {
   const { user } = useAuth();
   const userRole = user?.role || (Array.isArray(user?.roles) ? user.roles[0]?.name || user.roles[0] : '');
   const isAdmin = Boolean(user?.is_superuser || userRole === 'admin' || userRole === 'superadmin');
-  const { toast } = useSafeToast();
 
   const [activeTab, setActiveTab] = useState('notas'); // 'notas', 'planificacion'
   const [loading, setLoading] = useState(false);
@@ -297,6 +273,13 @@ export function EvaluationDashboard() {
   const handleSaveGrades = async () => {
     if (!selectedUnit || !selectedPeriod || students.length === 0 || isReadOnly) return;
 
+    const unidadExiste = malla.some(m => m.unidades.some(u => String(u.id) === String(selectedUnit)));
+    if (!unidadExiste) {
+      setSaveError('La unidad seleccionada no pertenece a la malla vigente.');
+      setSaveSuccess(null);
+      return;
+    }
+
     // Validación cliente de todas las notas
     const hasInvalidGrade = students.some(s => {
       if (s.nota_final === '' || s.nota_final === null || s.nota_final === undefined) return false;
@@ -349,11 +332,9 @@ export function EvaluationDashboard() {
 
       setStudents(newStudents);
       setSaveSuccess('Calificaciones guardadas exitosamente');
-      toast.success("¡Calificaciones guardadas exitosamente en el sistema SIGA!");
     } catch (e) {
       console.error('Error saving grades', e);
       setSaveError(mapSaveError(e));
-      toast.error("Ocurrió un error al guardar las calificaciones: " + (e.message || "Error de conexión"));
     } finally {
       setSaving(false);
     }

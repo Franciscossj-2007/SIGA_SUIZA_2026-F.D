@@ -1,9 +1,9 @@
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 import logging
 import uuid
 
@@ -16,6 +16,7 @@ from .core.gateway.event_schemas import EventType
 from .core.gateway import security_middleware as sm_module
 from .core.identity.auth_service import AuthService
 from .core.identity.database import get_identity_db
+from shared.validation import TextoRequerido
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -96,8 +97,12 @@ async def core_status():
 
 # === ENDPOINTS DE AUTENTICACIÓN ===
 @app.post("/auth/register")
-async def register_user(email: str, password: str, full_name: str = None, 
-                    db: AsyncSession = Depends(get_identity_db)):
+async def register_user(
+    email: EmailStr,
+    password: str = Query(..., min_length=8, max_length=128),
+    full_name: Optional[TextoRequerido] = Query(None),
+    db: AsyncSession = Depends(get_identity_db),
+):
     """Endpoint para registro de usuarios"""
     auth_service = AuthService(db)
     result = await auth_service.register_user(email, password, full_name)
@@ -108,7 +113,11 @@ async def register_user(email: str, password: str, full_name: str = None,
     return {"message": "Usuario registrado exitosamente", "user": result["user"]}
 
 @app.post("/auth/login")
-async def login_user(email: str, password: str, db: AsyncSession = Depends(get_identity_db)):
+async def login_user(
+    email: EmailStr,
+    password: str = Query(..., min_length=1, max_length=128),
+    db: AsyncSession = Depends(get_identity_db),
+):
     """Endpoint para login de usuarios"""
     auth_service = AuthService(db)
     result = await auth_service.authenticate_user(email, password)
@@ -142,8 +151,8 @@ async def get_current_user_info(authorization: Optional[str] = Header(None),
     return user
 
 class ChangePasswordRequest(BaseModel):
-    old_password: str
-    new_password: str
+    old_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 @app.put("/auth/change-password")
 async def change_password(request: ChangePasswordRequest, 

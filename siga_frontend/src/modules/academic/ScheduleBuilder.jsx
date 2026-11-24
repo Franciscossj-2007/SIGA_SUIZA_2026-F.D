@@ -59,7 +59,14 @@ export function ScheduleBuilder({ cargaLectiva, getUDName, getDocenteName }) {
   const confirm = useSafeConfirm();
 
   // Estado para el horario: key = "Dia-SlotId", value = carga_lectiva_id
-  const [schedule, setSchedule] = useState({});
+  const [schedule, setSchedule] = useState(() => {
+    try {
+      const guardado = JSON.parse(localStorage.getItem('siga_horario_local') || '{}');
+      return guardado && typeof guardado === 'object' && !Array.isArray(guardado) ? guardado : {};
+    } catch {
+      return {};
+    }
+  });
   const [draggedCargaId, setDraggedCargaId] = useState(null);
   const [warnings, setWarnings] = useState([]);
 
@@ -129,7 +136,12 @@ export function ScheduleBuilder({ cargaLectiva, getUDName, getDocenteName }) {
   };
 
   const handleSave = () => {
-    toast.info("Horario guardado temporalmente. (Función MVP: En un futuro se enlazará para guardarse en la BD).");
+    try {
+      localStorage.setItem('siga_horario_local', JSON.stringify(schedule));
+      toast.info('Horario guardado temporalmente en este navegador.');
+    } catch {
+      toast.error('No se pudo guardar el horario en este navegador.');
+    }
   };
 
   const getAssignedCount = (cargaId) => {
@@ -185,7 +197,7 @@ export function ScheduleBuilder({ cargaLectiva, getUDName, getDocenteName }) {
             </div>
             <div className="flex gap-2">
               <button onClick={handleClear} className="btn-ghost flex items-center gap-1.5 py-1.5"><RefreshCw size={14}/> Limpiar</button>
-              <button onClick={handleSave} className="btn-primary flex items-center gap-1.5 py-1.5"><Save size={14}/> Guardar</button>
+              <button type="button" onClick={handleSave} title="Guarda el horario en este navegador" className="btn-primary flex items-center gap-1.5 py-1.5"><Save size={14}/> Guardar</button>
             </div>
           </div>
 

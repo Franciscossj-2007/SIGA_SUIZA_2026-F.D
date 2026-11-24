@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 import bcrypt
 from database import get_db, OutboxEvent
 from models import Usuario, Rol, Permiso, PerfilPersonal
+from shared.validation import ContrasenaSegura, TextoRequerido
 
 
 def _hash_password(password: str) -> str:
@@ -17,7 +18,7 @@ router = APIRouter()
 
 # Schemas Pydantic
 class RolBase(BaseModel):
-    name: str
+    name: TextoRequerido
     description: Optional[str] = None
 
 class RolCreate(RolBase):
@@ -30,17 +31,17 @@ class RolResponse(RolBase):
 
 class UsuarioBase(BaseModel):
     email: EmailStr
-    full_name: str
+    full_name: TextoRequerido
     is_active: bool = True
     is_superuser: bool = False
 
 class UsuarioCreate(UsuarioBase):
-    password: str
+    password: ContrasenaSegura
     role_ids: List[int] = []
 
 class UsuarioUpdate(BaseModel):
     email: Optional[EmailStr] = None
-    full_name: Optional[str] = None
+    full_name: Optional[TextoRequerido] = None
     is_active: Optional[bool] = None
     is_superuser: Optional[bool] = None
     role_ids: Optional[List[int]] = None
@@ -53,10 +54,10 @@ class UsuarioResponse(UsuarioBase):
 
 
 class PerfilPersonalBase(BaseModel):
-    condicion_laboral: str
+    condicion_laboral: TextoRequerido
     numero_resolucion: Optional[str] = None
     fecha_fin_contrato: Optional[datetime] = None
-    cargo_funcional: str
+    cargo_funcional: TextoRequerido
     profesion_titulo: Optional[str] = None
     programa_estudio_id: Optional[int] = None
 
@@ -68,24 +69,24 @@ class PerfilPersonalResponse(PerfilPersonalBase):
 class PersonalCreate(BaseModel):
     # User fields
     email: EmailStr
-    full_name: str
-    password: str
+    full_name: TextoRequerido
+    password: ContrasenaSegura
     # Profile fields
-    condicion_laboral: str
+    condicion_laboral: TextoRequerido
     numero_resolucion: Optional[str] = None
     fecha_fin_contrato: Optional[datetime] = None
-    cargo_funcional: str
+    cargo_funcional: TextoRequerido
     profesion_titulo: Optional[str] = None
     programa_estudio_id: Optional[int] = None
 
 class PersonalUpdate(BaseModel):
     email: Optional[EmailStr] = None
-    full_name: Optional[str] = None
-    password: Optional[str] = None
-    condicion_laboral: Optional[str] = None
+    full_name: Optional[TextoRequerido] = None
+    password: Optional[ContrasenaSegura] = None
+    condicion_laboral: Optional[TextoRequerido] = None
     numero_resolucion: Optional[str] = None
     fecha_fin_contrato: Optional[datetime] = None
-    cargo_funcional: Optional[str] = None
+    cargo_funcional: Optional[TextoRequerido] = None
     profesion_titulo: Optional[str] = None
     programa_estudio_id: Optional[int] = None
 
@@ -142,7 +143,10 @@ async def crear_usuario(usuario: UsuarioCreate, request: Request, db: AsyncSessi
     # Asignar roles
     if usuario.role_ids:
         roles_result = await db.execute(select(Rol).where(Rol.id.in_(usuario.role_ids)))
-        db_user.roles = roles_result.scalars().all()
+        roles = roles_result.scalars().all()
+        if len(roles) != len(set(usuario.role_ids)):
+            raise HTTPException(status_code=400, detail="Uno o más roles indicados no existen")
+        db_user.roles = roles
 
     db.add(db_user)
     await db.flush()
@@ -203,7 +207,10 @@ async def actualizar_usuario(usuario_id: int, usuario: UsuarioUpdate, request: R
     if "role_ids" in update_data:
         role_ids = update_data.pop("role_ids")
         roles_result = await db.execute(select(Rol).where(Rol.id.in_(role_ids)))
-        db_user.roles = roles_result.scalars().all()
+        roles = roles_result.scalars().all()
+        if len(roles) != len(set(role_ids)):
+            raise HTTPException(status_code=400, detail="Uno o más roles indicados no existen")
+        db_user.roles = roles
 
     # Actualizar campos
     for key, value in update_data.items():

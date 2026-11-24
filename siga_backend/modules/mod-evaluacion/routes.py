@@ -195,8 +195,13 @@ async def crear_registro(data: RegistroEvaluacionCreate, request: Request, db: A
         {"p_id": data.periodo_id}
     )
     per_row = per_res.fetchone()
-    codigo_periodo = per_row[0] if per_row else str(data.periodo_id)
-    estado_periodo = per_row[1] if per_row else None
+    if not per_row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No se encontró el periodo académico con id {data.periodo_id}."
+        )
+    codigo_periodo = per_row[0]
+    estado_periodo = per_row[1]
 
     if estado_periodo not in ESTADOS_PERIODO_CALIFICABLES:
         raise HTTPException(

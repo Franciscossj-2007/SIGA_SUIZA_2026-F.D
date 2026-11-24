@@ -52,9 +52,10 @@ export function DashboardLayout({ children, currentView, onNavigate }) {
     const unsubConnect = wsClient.on('connected', () => setWsStatus('connected'));
     const unsubDisconnect = wsClient.on('disconnected', () => setWsStatus('disconnected'));
     const unsubMessage = wsClient.on('message', (data) => {
-      setNotifications(prev => [...prev, { id: ++notificationSeqRef.current, text: data }]);
+      const id = ++notificationSeqRef.current;
+      setNotifications(prev => [...prev, { id, text: data }]);
       setTimeout(() => {
-        setNotifications(prev => prev.slice(1));
+        setNotifications(prev => prev.filter(n => n.id !== id));
       }, 5000);
     });
 
@@ -284,7 +285,7 @@ export function DashboardLayout({ children, currentView, onNavigate }) {
                     label="Gestión Académica Central"
                   />
                 )}
-                {['superadmin', 'admin', 'secretaria_programa', 'admin_admision'].some(r => userRoles.includes(r)) && (
+                {['superadmin', 'admin', 'secretaria_programa', 'secretaria_academica', 'admin_admision'].some(r => userRoles.includes(r)) && (
                   <NavItem
                     active={currentView === 'students'}
                     onClick={() => onNavigate('students')}

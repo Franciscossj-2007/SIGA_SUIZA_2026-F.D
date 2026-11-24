@@ -367,9 +367,9 @@ export function CoordinatorSupervision() {
               </div>
               <button 
                 className="btn-primary text-sm px-4 py-2 flex items-center"
-                onClick={() => toast.info("Función 'Exportar a PDF (MINEDU)' en desarrollo.")}
+                onClick={() => window.print()}
               >
-                <FileSpreadsheet className="w-4 h-4 mr-1" /> Exportar Acta Oficial
+                <FileSpreadsheet className="w-4 h-4 mr-1" /> Imprimir Acta Oficial
               </button>
             </div>
           </div>

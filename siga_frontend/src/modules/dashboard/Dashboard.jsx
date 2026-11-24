@@ -7,6 +7,7 @@ export function Dashboard({ onNavigate }) {
   const { user, permissions } = useAuth();
   const [modules, setModules] = useState([]);
   const [systemStatus, setSystemStatus] = useState(null);
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
     const loadData = async () => {
@@ -18,8 +19,10 @@ export function Dashboard({ onNavigate }) {
 
         setModules(modulesData?.modules || []);
         setSystemStatus(statusData);
+        setLoadError('');
       } catch (error) {
         console.error('Error loading system data:', error);
+        setLoadError('No se pudo sincronizar con el Core Platform.');
       }
     };
 
@@ -31,6 +34,8 @@ export function Dashboard({ onNavigate }) {
   };
 
   const isAdmin = user?.is_superuser || user?.roles?.includes('superadmin');
+  const userRoles = user?.roles ? user.roles.map(r => typeof r === 'string' ? r : r.nombre || r.name) : [];
+  const tieneAcceso = (...roles) => isAdmin || roles.some(rol => userRoles.includes(rol));
 
   return (
     <div className="animate-fade-in space-y-8">
@@ -70,7 +75,9 @@ export function Dashboard({ onNavigate }) {
             </span>
             <div>
               <div className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-0.5">Estado Global</div>
-              <div className="text-3xl font-extrabold text-emerald-600">Saludable</div>
+              <div className="text-3xl font-extrabold text-emerald-600">
+                {systemStatus.status === 'healthy' ? 'Saludable' : (systemStatus.status || 'Desconocido')}
+              </div>
             </div>
           </div>
           <div className="glass-card p-6 flex items-center gap-5">
@@ -104,7 +111,7 @@ export function Dashboard({ onNavigate }) {
           {/* Card Coordinación de Programa */}
           <div 
             onClick={() => onNavigate?.('coordinator_academic')}
-            className="glass-card p-6 flex flex-col justify-between hover:-translate-y-1 transition-all duration-300 hover:shadow-glass-lg cursor-pointer border-t-4 border-t-primary group"
+            className={`glass-card p-6 flex flex-col justify-between hover:-translate-y-1 transition-all duration-300 hover:shadow-glass-lg cursor-pointer border-t-4 border-t-primary group ${tieneAcceso('coordinador_programa') ? '' : 'hidden'}`}
           >
             <div>
               <div className="flex items-center justify-between mb-3">
@@ -131,7 +138,7 @@ export function Dashboard({ onNavigate }) {
           {/* Card Panel Docente */}
           <div 
             onClick={() => onNavigate?.('evaluation')}
-            className="glass-card p-6 flex flex-col justify-between hover:-translate-y-1 transition-all duration-300 hover:shadow-glass-lg cursor-pointer border-t-4 border-t-indigo-500 group"
+            className={`glass-card p-6 flex flex-col justify-between hover:-translate-y-1 transition-all duration-300 hover:shadow-glass-lg cursor-pointer border-t-4 border-t-indigo-500 group ${tieneAcceso('docente') ? '' : 'hidden'}`}
           >
             <div>
               <div className="flex items-center justify-between mb-3">
@@ -158,7 +165,7 @@ export function Dashboard({ onNavigate }) {
           {/* Card Supervisión de Actas */}
           <div 
             onClick={() => onNavigate?.('coordinator_eval')}
-            className="glass-card p-6 flex flex-col justify-between hover:-translate-y-1 transition-all duration-300 hover:shadow-glass-lg cursor-pointer border-t-4 border-t-amber-500 group"
+            className={`glass-card p-6 flex flex-col justify-between hover:-translate-y-1 transition-all duration-300 hover:shadow-glass-lg cursor-pointer border-t-4 border-t-amber-500 group ${tieneAcceso('coordinador_programa', 'director') ? '' : 'hidden'}`}
           >
             <div>
               <div className="flex items-center justify-between mb-3">
@@ -199,8 +206,23 @@ export function Dashboard({ onNavigate }) {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {modules.length === 0 ? (
               <div className="col-span-full glass-card py-16 text-center">
-                <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                <p className="text-slate-500 font-medium">Sincronizando con el Core Platform...</p>
+                {loadError ? (
+                  <>
+                    <p className="text-rose-600 font-medium">{loadError}</p>
+                    <button
+                      type="button"
+                      onClick={() => window.location.reload()}
+                      className="mt-4 px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold"
+                    >
+                      Reintentar
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                    <p className="text-slate-500 font-medium">Sincronizando con el Core Platform...</p>
+                  </>
+                )}
               </div>
             ) : (
               modules.map(module => (

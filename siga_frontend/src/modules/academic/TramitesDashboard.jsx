@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { apiClient } from '../../core/api/client';
-import { Plus, Eye, FileText, Repeat, GraduationCap } from 'lucide-react';
+import { FileText, Repeat, GraduationCap } from 'lucide-react';
 import { ConvalidacionesTab } from './ConvalidacionesTab';
 import { BecasTab } from './BecasTab';
 
@@ -89,9 +89,7 @@ export function TramitesDashboard() {
             <div className="space-y-6 animate-fade-in">
               <div className="flex justify-between items-center mb-4">
                 <h4 className="text-lg font-bold text-slate-700">Solicitudes Ingresadas</h4>
-                <button className="btn-primary py-1.5 px-4 text-sm rounded-lg flex items-center gap-1.5">
-                  <Plus size={16} /> Nueva Solicitud Manual
-                </button>
+
               </div>
               
               {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>}
@@ -141,9 +139,7 @@ export function TramitesDashboard() {
                             <option value="emitido">Emitido / Aprobado</option>
                             <option value="rechazado">Rechazado</option>
                           </select>
-                          <button className="btn-icon text-slate-400 hover:text-amber-600" title="Ver Detalles">
-                            <Eye size={18} />
-                          </button>
+
                         </td>
                       </tr>
                     ))}

@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   UserPlus, UserCog, QrCode, Scale, HeartHandshake,
   ShieldAlert, Trophy, Users, FolderOpen, PlusCircle, GraduationCap,
 } from 'lucide-react';
 import { API_BASE } from '../../core/api/client';
+import { PROGRAMAS } from '../../core/catalog/programas';
 import { useAuth } from '../../core/auth/useAuth';
 import { EnrollmentProcess } from './EnrollmentProcess';
 import { EnrollmentFlowDiagram } from './EnrollmentFlowDiagram';
@@ -30,52 +31,80 @@ export function EnrollmentDashboard() {
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPrograma, setCurrentPrograma] = useState('ALL');
+  const [loadError, setLoadError] = useState('');
+  const fetchAbortRef = useRef(null);
+  const searchTermRef = useRef('');
+  useEffect(() => { searchTermRef.current = searchTerm; }, [searchTerm]);
 
-
-  const fetchStudents = async (searchVal = searchTerm) => {
+  const fetchStudents = useCallback(async (searchVal = '') => {
+    fetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
     setLoading(true);
+    setLoadError('');
     try {
       let url = `${API_BASE}/api/mod-gestion-academica/estudiantes/`;
       if (currentPrograma && currentPrograma !== 'ALL') {
-        url += `?programa_id=${currentPrograma}`;
+        url += `?programa_id=${encodeURIComponent(currentPrograma)}`;
       }
-      
+
       const response = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        signal: controller.signal,
       });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-      
+
+      const term = searchVal.trim().toLowerCase();
       let finalData = Array.isArray(data) ? data : [];
-      if (searchVal.length >= 3) {
-        finalData = finalData.filter(s => 
-          (s.dni && s.dni.includes(searchVal)) || 
-          (s.nombres && s.nombres.toLowerCase().includes(searchVal.toLowerCase())) || 
-          (s.apellidos && s.apellidos.toLowerCase().includes(searchVal.toLowerCase())) || 
-          (s.codigo_estudiante && s.codigo_estudiante.includes(searchVal))
+      if (term.length >= 2) {
+        finalData = finalData.filter(s =>
+          String(s.dni ?? '').includes(term) ||
+          String(s.nombres ?? '').toLowerCase().includes(term) ||
+          String(s.apellidos ?? '').toLowerCase().includes(term) ||
+          String(s.codigo_estudiante ?? '').toLowerCase().includes(term)
         );
       }
       setStudents(finalData);
     } catch (error) {
-      console.error('Error fetching students:', error);
+      if (error.name === 'AbortError') return;
+      setStudents([]);
+      setLoadError('No se pudo cargar la lista de estudiantes. Intente nuevamente.');
     } finally {
-      setLoading(false);
+      if (fetchAbortRef.current === controller) setLoading(false);
     }
-  };
+  }, [currentPrograma]);
 
   useEffect(() => {
-    queueMicrotask(() => {
-      if (userRole !== 'invitado') {
-        if (userRole === 'secretaria_programa' && currentPrograma === 'ALL') {
-          const fallbackId = user?.email === 'secretaria_prog@siga.edu' ? '2' : '1';
-          setCurrentPrograma(user?.programa_id ? String(user.programa_id) : fallbackId);
-        } else {
-          fetchStudents();
-        }
+    if (userRole === 'invitado') return;
+    if (userRole === 'secretaria_programa' && currentPrograma === 'ALL') {
+      const programaAsignado = user?.programa_id ? String(user.programa_id) : '';
+      if (!programaAsignado) {
+        queueMicrotask(() => {
+          setStudents([]);
+          setLoadError('Tu usuario no tiene un programa de estudio asignado.');
+          setLoading(false);
+        });
+        return;
       }
-    });
-    // Solo debe re-ejecutarse al cambiar de programa o rol (no en cada tecla del buscador).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPrograma, userRole]);
+      queueMicrotask(() => setCurrentPrograma(programaAsignado));
+      return;
+    }
+    fetchStudents(searchTermRef.current);
+  }, [currentPrograma, userRole, user?.programa_id, fetchStudents]);
+
+  const fetchStudentsRef = useRef(fetchStudents);
+  useEffect(() => { fetchStudentsRef.current = fetchStudents; }, [fetchStudents]);
+
+  const skipInitialSearchRef = useRef(true);
+  useEffect(() => {
+    if (skipInitialSearchRef.current) {
+      skipInitialSearchRef.current = false;
+      return;
+    }
+    const timer = setTimeout(() => fetchStudentsRef.current(searchTerm), 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
   const handleEnrollClick = (student) => {
     setSelectedStudent(student);
@@ -223,12 +252,9 @@ export function EnrollmentDashboard() {
             }}
           >
             <option value="ALL">Todos los Programas</option>
-            <option value="1">Arquitectura de Plat.</option>
-            <option value="2">Enfermería Técnica</option>
-            <option value="3">Diseño Gráfico</option>
-            <option value="4">Administración</option>
-            <option value="5">Contabilidad</option>
-            <option value="6">Mecatrónica</option>
+            {PROGRAMAS.filter(p => p.id !== 'ALL').map(p => (
+              <option key={p.id} value={p.id}>{p.label}</option>
+            ))}
           </select>
         )}
         <span className="px-4 text-slate-400 text-xl">🔍</span>
@@ -237,13 +263,19 @@ export function EnrollmentDashboard() {
           className="w-full bg-transparent border-none focus:ring-0 py-3 text-slate-700 placeholder-slate-400 outline-none"
           placeholder="Buscar por DNI, Nombre o Código..."
           value={searchTerm} 
-          onChange={(e) => {
-            setSearchTerm(e.target.value);
-            fetchStudents(e.target.value);
-          }}
+          onChange={(e) => setSearchTerm(e.target.value)}
         />
         {loading && <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin mx-4"></div>}
       </div>
+
+      {loadError && (
+        <div className="mb-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          {loadError}
+          <button type="button" onClick={() => fetchStudents(searchTerm)} className="ml-3 font-bold underline">
+            Reintentar
+          </button>
+        </div>
+      )}
 
       <div className="glass-card p-6">
         <div className="overflow-x-auto">

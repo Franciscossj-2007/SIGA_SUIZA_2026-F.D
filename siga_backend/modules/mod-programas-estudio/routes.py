@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete, text
 from typing import List, Optional
 from datetime import datetime, date
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from database import get_db, OutboxEvent
 from models import ProgramaEstudio, ProgramaConfiguracion, ProgramaModulo, ProgramaUnidad, ProgramaRequisito, PeriodoAcademico
 from shared.identity import (
@@ -12,6 +12,7 @@ from shared.identity import (
 from schemas import (
     SilaboUpdate, PlanTrabajoDocenteUpdate, CargaLectivaUpdate, HorarioPeriodoUpdate
 )
+from shared.validation import CodigoRequerido, TextoRequerido
 
 router = APIRouter()
 
@@ -34,11 +35,11 @@ def _limitar_texto(valor, limite=255):
 
 # Schemas Pydantic
 class ProgramaBase(BaseModel):
-    nombre: str
-    codigo: str
+    nombre: TextoRequerido
+    codigo: CodigoRequerido
     descripcion: Optional[str] = None
-    duracion_periodos: int = 6
-    creditos_totales: int
+    duracion_periodos: int = Field(default=6, gt=0, le=40)
+    creditos_totales: int = Field(..., gt=0, le=1000)
     plan_estudio_id: Optional[int] = None
     modalidad: str = "presencial"
     estado: str = "activo"
@@ -81,12 +82,24 @@ class ProgramaPlanImport(BaseModel):
 
 # Schemas Periodo Academico
 class PeriodoBase(BaseModel):
-    codigo: str
+    codigo: CodigoRequerido
     fecha_inicio: datetime
     fecha_fin: datetime
     estado: str = "planificacion"
     fecha_fin_matricula_regular: Optional[datetime] = None
     fecha_fin_matricula_extemporanea: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def validar_rango_fechas(self):
+        inicio = self.fecha_inicio.replace(tzinfo=None)
+        fin = self.fecha_fin.replace(tzinfo=None)
+        if fin <= inicio:
+            raise ValueError("La fecha de fin debe ser posterior a la fecha de inicio")
+        for campo in ("fecha_fin_matricula_regular", "fecha_fin_matricula_extemporanea"):
+            fecha = getattr(self, campo)
+            if fecha is not None and not (inicio <= fecha.replace(tzinfo=None) <= fin):
+                raise ValueError(f"{campo} debe estar dentro del rango del periodo")
+        return self
 
 class PeriodoCreate(PeriodoBase):
     pass

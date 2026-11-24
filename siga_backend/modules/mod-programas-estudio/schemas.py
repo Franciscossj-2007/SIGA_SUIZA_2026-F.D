@@ -4,6 +4,7 @@ Esquemas Pydantic para el módulo mod-programas-estudio (SIGA Suiza 2026).
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Optional, List
 from datetime import datetime, date
+from shared.validation import CodigoRequerido
 
 
 # ==============================================================================
@@ -160,12 +161,24 @@ class ProgramaResponse(ProgramaBase):
     model_config = ConfigDict(from_attributes=True)
 
 class PeriodoBase(BaseModel):
-    codigo: str
+    codigo: CodigoRequerido
     fecha_inicio: datetime
     fecha_fin: datetime
     estado: str = "planificacion"
     fecha_fin_matricula_regular: Optional[datetime] = None
     fecha_fin_matricula_extemporanea: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def validar_rango_fechas(self):
+        inicio = self.fecha_inicio.replace(tzinfo=None)
+        fin = self.fecha_fin.replace(tzinfo=None)
+        if fin <= inicio:
+            raise ValueError("La fecha de fin debe ser posterior a la fecha de inicio")
+        for campo in ("fecha_fin_matricula_regular", "fecha_fin_matricula_extemporanea"):
+            fecha = getattr(self, campo)
+            if fecha is not None and not (inicio <= fecha.replace(tzinfo=None) <= fin):
+                raise ValueError(f"{campo} debe estar dentro del rango del periodo")
+        return self
 
 class PeriodoCreate(PeriodoBase):
     pass

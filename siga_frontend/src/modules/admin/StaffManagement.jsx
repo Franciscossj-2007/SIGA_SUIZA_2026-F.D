@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { apiClient } from '../../core/api/client';
 import { useToast } from '../../core/ui/ToastContext';
 import { Plus, Pencil, X, UserCog } from 'lucide-react';
@@ -23,41 +23,45 @@ export function StaffManagement() {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const fetchStaff = async () => {
+  const fetchStaff = useCallback(async () => {
     setLoading(true);
-    try {
-      const data = await apiClient.request('/api/mod-usuarios/personal');
-      setStaffList(Array.isArray(data) ? data : []);
-      
-      // Also fetch programs for the dropdown
-      const progData = await apiClient.request('/api/mod-programas-estudio/programas');
-      setPrograms(Array.isArray(progData) ? progData : []);
-    } catch (error) {
-      console.error('Error fetching staff:', error);
-    } finally {
-      setLoading(false);
+    const [staffResult, programsResult] = await Promise.allSettled([
+      apiClient.request('/api/mod-usuarios/personal'),
+      apiClient.request('/api/mod-programas-estudio/programas')
+    ]);
+    if (staffResult.status === 'fulfilled') {
+      setStaffList(Array.isArray(staffResult.value) ? staffResult.value : []);
+    } else {
+      console.error('Error fetching staff:', staffResult.reason);
+      toast.error('No se pudo cargar el personal.');
     }
-  };
+    if (programsResult.status === 'fulfilled') {
+      setPrograms(Array.isArray(programsResult.value) ? programsResult.value : []);
+    } else {
+      console.error('Error fetching programs:', programsResult.reason);
+    }
+    setLoading(false);
+  }, [toast]);
 
   useEffect(() => {
     queueMicrotask(() => {
       fetchStaff();
     });
-  }, []);
+  }, [fetchStaff]);
 
   
   const openEditModal = (item) => {
-    setEditingId(item.perfil.id);
+    setEditingId(item.perfil?.id ?? item.usuario?.id ?? null);
     setFormData({
-      email: item.usuario.email,
-      full_name: item.usuario.full_name,
-      password: '', // Leave blank unless changing
-      condicion_laboral: item.perfil.condicion_laboral,
-      numero_resolucion: item.perfil.numero_resolucion || '',
-      fecha_fin_contrato: item.perfil.fecha_fin_contrato ? item.perfil.fecha_fin_contrato.split('T')[0] : '',
-      cargo_funcional: item.perfil.cargo_funcional,
-      profesion_titulo: item.perfil.profesion_titulo || '',
-      programa_estudio_id: item.perfil.programa_estudio_id || ''
+      email: item.usuario?.email ?? '',
+      full_name: item.usuario?.full_name ?? '',
+      password: '',
+      condicion_laboral: item.perfil?.condicion_laboral ?? 'NOMBRADO_ESTADO',
+      numero_resolucion: item.perfil?.numero_resolucion ?? '',
+      fecha_fin_contrato: item.perfil?.fecha_fin_contrato ? item.perfil.fecha_fin_contrato.split('T')[0] : '',
+      cargo_funcional: item.perfil?.cargo_funcional ?? 'DOCENTE_AULA',
+      profesion_titulo: item.perfil?.profesion_titulo ?? '',
+      programa_estudio_id: item.perfil?.programa_estudio_id ?? ''
     });
     setShowModal(true);
   };
@@ -172,12 +176,12 @@ export function StaffManagement() {
                     <td className="px-6 py-4">
                       <div className="flex items-center">
                         <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary to-primary-dark flex items-center justify-center text-white font-bold mr-3 shadow-md">
-                          {item.usuario.full_name.charAt(0).toUpperCase()}
+                          {(item.usuario?.full_name ?? '?').charAt(0).toUpperCase()}
                         </div>
                         <div>
-                          <div className="font-bold text-slate-text">{item.usuario.full_name}</div>
-                          <div className="text-xs text-slate-500">{item.usuario.email}</div>
-                          {item.perfil.profesion_titulo && (
+                          <div className="font-bold text-slate-text">{item.usuario?.full_name ?? 'Sin nombre'}</div>
+                          <div className="text-xs text-slate-500">{item.usuario?.email ?? 'Sin correo'}</div>
+                          {item.perfil?.profesion_titulo && (
                             <div className="text-[10px] text-primary font-medium">{item.perfil.profesion_titulo}</div>
                           )}
                         </div>
@@ -185,16 +189,16 @@ export function StaffManagement() {
                     </td>
                     <td className="px-6 py-4">
                       <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-bold bg-primary-soft text-primary border border-primary/20">
-                        {item.perfil.cargo_funcional.replace('_', ' ')}
+                        {(item.perfil?.cargo_funcional ?? 'SIN CARGO').replace('_', ' ')}
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`badge ${item.perfil.condicion_laboral === 'NOMBRADO_ESTADO' ? 'badge-green' : 'badge-amber'}`}>
-                        {item.perfil.condicion_laboral.replace('_', ' ')}
+                      <span className={`badge ${item.perfil?.condicion_laboral === 'NOMBRADO_ESTADO' ? 'badge-green' : 'badge-amber'}`}>
+                        {(item.perfil?.condicion_laboral ?? 'SIN CONDICIÓN').replace('_', ' ')}
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      {item.perfil.numero_resolucion ? (
+                      {item.perfil?.numero_resolucion ? (
                         <div>
                           <div className="text-sm font-semibold text-slate-text">{item.perfil.numero_resolucion}</div>
                           {item.perfil.fecha_fin_contrato && (
@@ -283,7 +287,7 @@ export function StaffManagement() {
                     <div>
                       <label className="block text-sm font-semibold text-slate-700 mb-1">Contraseña Inicial</label>
                       <input 
-                        type="text" 
+                        type="password" 
                         name="password"
                         value={formData.password}
                         onChange={handleInputChange}

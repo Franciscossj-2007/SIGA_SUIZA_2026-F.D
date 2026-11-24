@@ -241,6 +241,12 @@ export function AcademicDashboard() {
       const nombreTrimmed = newProgram.nombre.trim();
       const codigoTrimmed = newProgram.codigo.trim().toUpperCase();
 
+      if (!nombreTrimmed || !codigoTrimmed) {
+        setCreateError('El nombre y el código del programa son obligatorios.');
+        setSavingProgram(false);
+        return;
+      }
+
       // Validación preventiva local: verificar si el programa ya existe por código o por nombre
       const normalize = (str) => (str || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
       const existeCodigo = programs.some(p => p.codigo && p.codigo.trim().toUpperCase() === codigoTrimmed);
@@ -303,7 +309,7 @@ export function AcademicDashboard() {
     try {
       await apiClient.request(`/api/mod-programas-estudio/programas/${editingProgram.id}`, {
         method: 'PUT',
-        data: {
+        body: JSON.stringify({
           nombre: editingProgram.nombre,
           codigo: editingProgram.codigo,
           descripcion: editingProgram.descripcion || '',
@@ -311,7 +317,7 @@ export function AcademicDashboard() {
           duracion_periodos: parseInt(editingProgram.duracion_periodos) || 6,
           modalidad: editingProgram.modalidad || 'presencial',
           estado: editingProgram.estado || 'activo'
-        }
+        })
       });
       setEditingProgram(null);
       await fetchData();
@@ -382,12 +388,12 @@ export function AcademicDashboard() {
     try {
       await apiClient.request(`/api/mod-programas-estudio/programas/${configProgram.id}/configuracion`, {
         method: 'POST',
-        data: {
+        body: JSON.stringify({
           periodo_academico: parseInt(paramConfig.periodo_academico) || 1,
           turnos: paramConfig.turnos,
           max_estudiantes: parseInt(paramConfig.max_estudiantes) || 35,
           coordinador_id: null
-        }
+        })
       });
       toast.success('¡Parametrización guardada exitosamente!');
       setConfigProgram(null);
@@ -529,7 +535,7 @@ export function AcademicDashboard() {
       console.error('Error en importación de carrera:', error);
       const msg = error.message || 'Error al crear la carrera. Verifique que el código o nombre no existan previamente.';
       setImportError(msg);
-      toast.error(msg, 'Error en Importación');
+      toast.error(msg);
     } finally {
       setIsProcessing(false);
     }

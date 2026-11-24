@@ -299,6 +299,10 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
       setError("Los nombres, apellidos y DNI son campos obligatorios.");
       return;
     }
+    if (!/^\d{8}$/.test(String(form.dni).trim())) {
+      setError("El DNI debe tener exactamente 8 dígitos.");
+      return;
+    }
     setError(null);
     setShowConfirmModal(true);
   };

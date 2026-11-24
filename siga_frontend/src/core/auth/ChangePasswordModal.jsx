@@ -34,8 +34,8 @@ export function ChangePasswordModal({ isOpen, onClose }) {
     setLoading(true);
     setError(null);
 
-    if (formData.new_password.length < 6) {
-      setError("La nueva contraseña debe tener al menos 6 caracteres.");
+    if (formData.new_password.length < 8) {
+      setError("La nueva contraseña debe tener al menos 8 caracteres.");
       setLoading(false);
       return;
     }
