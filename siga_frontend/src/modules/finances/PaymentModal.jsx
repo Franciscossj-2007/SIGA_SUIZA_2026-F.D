@@ -16,9 +16,8 @@ import {
   CheckCircle2,
   EyeOff,
 } from 'lucide-react';
-import { PAYMENT_METHODS, CAREERS_MAP, getAvailableConcepts } from './tupaCatalog';
+import { PAYMENT_METHODS, useCareersMap, nombreCarrera, getAvailableConcepts } from './tupaCatalog';
 import { useToast } from '../../core/ui/ToastContext';
-import { useConfirm } from '../../core/ui/ConfirmModal';
 import { ConceptFormModal } from './ConceptFormModal';
 import { ModalPortal } from './ModalPortal';
 import { QrCodeView } from './QrCodeView';
@@ -37,8 +36,8 @@ export function PaymentModal({
   onClose,
   onSuccess,
 }) {
+  const careersMap = useCareersMap();
   const toast = useToast();
-  const confirm = useConfirm();
   const { available, hidden } = useMemo(
     () => getAvailableConcepts(catalog, student, studentPayments),
     [catalog, student, studentPayments]
@@ -68,7 +67,7 @@ export function PaymentModal({
   const selectedTarifa = selectedConcept
     ? selectedConcept.tarifas.find(t => t.id === selectedTarifaId) || selectedConcept.tarifas[0]
     : null;
-  const careerName = CAREERS_MAP[student.programa_id] || 'Programa de Estudio General';
+  const careerName = nombreCarrera(careersMap, student.programa_id);
 
   const isLibre = selectedConcept?.tipoPrecio === 'libre';
   const monto = !selectedConcept
@@ -89,7 +88,7 @@ export function PaymentModal({
   };
 
   const handleDeleteConcept = async (concept) => {
-    const ok = await confirm({
+    const ok = await toast.confirm({
       title: 'Eliminar Concepto TUPA',
       message: `¿Eliminar "${concept.codigo} · ${concept.nombre}" del tarifario TUPA? Los recibos ya emitidos se conservan.`,
       type: 'danger',
@@ -101,6 +100,7 @@ export function PaymentModal({
       toast.success('Concepto eliminado del tarifario.');
     } catch (err) {
       setError(err.message);
+      toast.error(err.message);
     }
   };
 

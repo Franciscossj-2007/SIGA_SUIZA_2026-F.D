@@ -1,7 +1,9 @@
-import { useState, useEffect, useRef, Fragment } from 'react';
+﻿import { useState, useEffect, useRef, Fragment } from 'react';
 import { API_BASE } from '../../core/api/client';
 import { useAuth } from '../../core/auth/useAuth';
 import { BoletinImpresion } from './BoletinImpresion';
+import { useDictado } from './voz/useDictado';
+import { buscarPorVoz } from './voz/buscarPorVoz';
 import {
   ArrowUpDown, BadgeCheck, BookOpen, ChevronDown,
   ClipboardList, GraduationCap, Hash, IdCard, Mail,
@@ -11,13 +13,37 @@ import {
 const normalizarTexto = (texto) =>
   (texto || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
+/**
+ * Normaliza lo escrito o dictado para buscar: sin tildes ni may\u00fasculas, sin signos y con
+ * los n\u00fameros dictados en bloques unidos ("72 34 56 78" -> "72345678").
+ */
+const normalizarBusqueda = (texto) =>
+  normalizarTexto(String(texto ?? ''))
+    .replace(/[.,;:!?\u00bf\u00a1"'()]/g, ' ')
+    .replace(/(\d)[\s-]+(?=\d)/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/** Cada palabra buscada debe estar en nombres, apellidos, DNI o c\u00f3digo (tambi\u00e9n sin guion). */
+const coincideEstudiante = (s, termino) => {
+  const palabras = normalizarBusqueda(termino).split(' ').filter(Boolean);
+  if (palabras.length === 0) return false;
+  const codigo = String(s.codigo_estudiante ?? '');
+  const ficha = normalizarBusqueda(`${s.nombres} ${s.apellidos} ${s.dni} ${codigo}`)
+    + ' ' + codigo.replace(/\D/g, '');
+  return palabras.every((p) => ficha.includes(p));
+};
+
+/** Evento con el que la etiqueta "B\u00fasqueda por voz" activa el micr\u00f3fono del buscador. */
+const EVENTO_VOZ = 'siga:boletin-voz';
+
 const NOTA_MIN_APROBAR = 13;
 
 const ESCALA_CALIFICACION = [
-  { min: 18, max: 20, rango: '18 – 20', sigla: 'AD', label: 'Excelente', tone: 'emerald' },
-  { min: 14, max: 17.99, rango: '14 – 17', sigla: 'AB', label: 'Bueno', tone: 'blue' },
+  { min: 18, max: 20, rango: '18 ÔÇô 20', sigla: 'AD', label: 'Excelente', tone: 'emerald' },
+  { min: 14, max: 17.99, rango: '14 ÔÇô 17', sigla: 'AB', label: 'Bueno', tone: 'blue' },
   { min: 13, max: 13.99, rango: '13', sigla: 'B', label: 'Aprobado', tone: 'amber' },
-  { min: 0, max: 12.99, rango: '0 – 12', sigla: 'D', label: 'Desaprobado', tone: 'red' },
+  { min: 0, max: 12.99, rango: '0 ÔÇô 12', sigla: 'D', label: 'Desaprobado', tone: 'red' },
 ];
 
 const escalaDe = (nota) => {
@@ -31,129 +57,6 @@ const hashCorto = (texto) => {
   return h.toString(36).toUpperCase().padStart(7, '0').slice(0, 7);
 };
 
-const tituloCiclo = (numero) => {
-  const romanos = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
-  return romanos[numero - 1] ? `CICLO ${romanos[numero - 1]}` : `CICLO ${numero}`;
-};
-
-const estadoDeNota = (nota, estadoGuardado) => {
-  if (nota === null || nota === undefined) return estadoGuardado || 'no_cursado';
-  return nota >= NOTA_MIN_APROBAR ? 'aprobado' : 'desaprobado';
-};
-
-const unidadesDeBoletin = (lista) => (Array.isArray(lista) ? lista : []).map(u => ({
-  nombre: u.unidad_nombre || u.nombre,
-  creditos: u.creditos,
-  nota: u.nota_final ?? u.nota ?? null,
-  nota_c1: u.nota_c1 ?? null,
-  nota_c2: u.nota_c2 ?? null,
-  nota_c3: u.nota_c3 ?? null,
-  estado: u.estado || estadoDeNota(u.nota_final ?? u.nota),
-}));
-
-const notasPorCicloDesdeBoletin = (boletin) => {
-  const ciclos = Array.isArray(boletin?.ciclos) ? boletin.ciclos : [];
-  if (ciclos.length === 0) return null;
-  const porCiclo = new Map();
-  ciclos.forEach((ciclo, indice) => {
-    const numero = Number(ciclo.ciclo) || indice + 1;
-    const unidades = unidadesDeBoletin(ciclo.unidades);
-    porCiclo.set(numero, {
-      ciclo: numero,
-      titulo: ciclo.titulo || tituloCiclo(numero),
-      periodo_codigo: ciclo.periodo_codigo || boletin.estudiante?.periodo_codigo,
-      unidades,
-      completado: unidades.length > 0 && unidades.every(u => u.estado === 'aprobado'),
-    });
-  });
-  const cicloActual = Math.max(...porCiclo.keys());
-  const cursosPeriodo = unidadesDeBoletin(boletin.cursos_periodo);
-  return {
-    cicloActual,
-    porCiclo,
-    periodoActual: boletin.estudiante?.periodo_codigo || porCiclo.get(cicloActual).periodo_codigo,
-    unidadesPeriodoActual: cursosPeriodo.length > 0 ? cursosPeriodo : porCiclo.get(cicloActual).unidades,
-  };
-};
-
-const obtenerNotasPorCiclo = (estudianteId, studentExtra = null, boletin = null) => {
-  if (!boletin) return null;
-  if (estudianteId != null && boletin.estudiante?.id != null && Number(estudianteId) !== Number(boletin.estudiante.id)) return null;
-  const codigo = boletin.estudiante?.codigo_estudiante;
-  if (studentExtra?.codigo_estudiante && codigo && studentExtra.codigo_estudiante !== codigo) return null;
-  return notasPorCicloDesdeBoletin(boletin);
-};
-
-const resumenDesdeJson = (notasJson) => {
-  if (!notasJson) return null;
-  const unidades = notasJson.unidadesPeriodoActual || [];
-  const conNota = unidades.filter(u => u.nota != null);
-  const promedio = conNota.length > 0
-    ? Math.round(conNota.reduce((s, u) => s + u.nota, 0) / conNota.length)
-    : null;
-  return {
-    periodo_codigo: notasJson.periodoActual,
-    cursos_periodo: unidades.map(u => ({
-      unidad_nombre: u.nombre,
-      creditos: u.creditos,
-      nota_c1: u.nota_c1,
-      nota_c2: u.nota_c2,
-      nota_c3: u.nota_c3,
-      nota_final: u.nota,
-      promedio_curso: u.nota,
-      estado: u.estado,
-    })),
-    resumen: {
-      promedio_general: promedio,
-      cursos_aprobados: unidades.filter(u => u.estado === 'aprobado').length,
-      cursos_desaprobados: unidades.filter(u => u.estado === 'desaprobado').length,
-      total_cursos: unidades.length,
-    },
-  };
-};
-
-const generarBoletinDesdeJson = (estudianteId, studentExtra = null, boletin = null) => {
-  const notasJson = notasPorCicloDesdeBoletin(boletin);
-  if (!notasJson) return null;
-  const periodoActual = resumenDesdeJson(notasJson);
-  const estudiante = boletin?.estudiante || studentExtra;
-  if (!estudiante?.codigo_estudiante) return null;
-  const ciclos = Array.from(notasJson.porCiclo.values());
-  const creditosAprobados = ciclos.reduce(
-    (total, c) => total + c.unidades.filter(u => u.estado === 'aprobado').reduce((s, u) => s + (u.creditos || 0), 0), 0);
-  const creditosTotales = boletin?.progreso_creditos?.creditos_totales || 0;
-  return {
-    estudiante: {
-      ...estudiante,
-      periodo_codigo: notasJson.periodoActual,
-      fecha_emision: estudiante.fecha_emision || new Date().toLocaleDateString('es-PE'),
-    },
-    matricula_estado: boletin?.matricula_estado || {},
-    estado_academico: estudiante.estado_academico || boletin?.estado_academico || 'matriculado',
-    progreso_creditos: {
-      creditos_aprobados: creditosAprobados,
-      creditos_totales: creditosTotales,
-      porcentaje: creditosTotales > 0 ? Math.round((creditosAprobados / creditosTotales) * 100) : 0,
-    },
-    cursos_periodo: periodoActual.cursos_periodo,
-    ciclos,
-    resumen: { ...periodoActual.resumen, ...(boletin?.resumen || {}) },
-    historial: boletin?.historial || [],
-    observaciones: boletin?.observaciones || null,
-    _notasJson: notasJson,
-  };
-};
-
-const mockEvaluacion = {
-  evaluaciones: (boletin) => (boletin?.estudiante ? [{
-    codigo_estudiante: boletin.estudiante.codigo_estudiante,
-    periodo: boletin.estudiante.periodo_codigo,
-    progreso_creditos: boletin.progreso_creditos,
-    cursos_periodo: boletin.cursos_periodo,
-    resumen: boletin.resumen,
-  }] : []),
-};
-
 const TONE_BADGE = {
   emerald: 'bg-gradient-to-r from-emerald-400 to-teal-500 text-white border-emerald-500',
   blue: 'bg-gradient-to-r from-sky-400 to-blue-500 text-white border-blue-500',
@@ -164,11 +67,11 @@ const TONE_BADGE = {
 };
 
 const valorarPromedio = (nota) => {
-  if (nota === null || nota === undefined) return { label: 'Sin evaluación', tone: 'slate' };
-  if (nota >= 18) return { label: 'AD · Excelente', tone: 'emerald' };
-  if (nota >= 14) return { label: 'AB · Bueno', tone: 'blue' };
-  if (nota >= NOTA_MIN_APROBAR) return { label: 'B · Aprobado', tone: 'amber' };
-  return { label: 'D · Desaprobado', tone: 'red' };
+  if (nota === null || nota === undefined) return { label: 'Sin evaluaci├│n', tone: 'slate' };
+  if (nota >= 18) return { label: 'AD ┬À Excelente', tone: 'emerald' };
+  if (nota >= 14) return { label: 'AB ┬À Bueno', tone: 'blue' };
+  if (nota >= NOTA_MIN_APROBAR) return { label: 'B ┬À Aprobado', tone: 'amber' };
+  return { label: 'D ┬À Desaprobado', tone: 'red' };
 };
 
 const condicionTone = (estado) => {
@@ -227,39 +130,39 @@ function InfoItem(props) {
       </span>
       <div className="min-w-0">
         <p className="text-[10px] text-slate-400 uppercase font-bold tracking-[0.14em]">{label}</p>
-        <p className="font-semibold text-slate-800 text-sm truncate" title={value || ''}>{value || '—'}</p>
+        <p className="font-semibold text-slate-800 text-sm truncate" title={value || ''}>{value || 'ÔÇö'}</p>
       </div>
     </div>
   );
 }
 
-/* Estado vacío del módulo: réplica visual (solo JSX/CSS) de la referencia.
-   No toca lógica: se renderiza únicamente cuando aún no hay estudiante seleccionado. */
+/* Estado vac├¡o del m├│dulo: r├®plica visual (solo JSX/CSS) de la referencia.
+   No toca l├│gica: se renderiza ├║nicamente cuando a├║n no hay estudiante seleccionado. */
 function BoletinEmptyState() {
   const cursos = [
-    { nombre: 'Programación', nota: '18', pct: '90%', bar: 'bg-teal-400/90' },
+    { nombre: 'Programaci├│n', nota: '18', pct: '90%', bar: 'bg-teal-400/90' },
     { nombre: 'Base de Datos', nota: '16', pct: '80%', bar: 'bg-blue-500/90' },
-    { nombre: 'Diseño Web', nota: '17', pct: '85%', bar: 'bg-violet-500/90' },
+    { nombre: 'Dise├▒o Web', nota: '17', pct: '85%', bar: 'bg-violet-500/90' },
     { nombre: 'Redes', nota: '15', pct: '75%', bar: 'bg-amber-500/90' },
-    { nombre: 'Análisis de Sistemas', nota: '19', pct: '95%', bar: 'bg-cyan-400/90' },
+    { nombre: 'An├ílisis de Sistemas', nota: '19', pct: '95%', bar: 'bg-cyan-400/90' },
   ];
   const chips = [
     { label: 'DNI', icon: 'M4 5h16a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6a1 1 0 011-1zm3 4a1.5 1.5 0 100 3 1.5 1.5 0 000-3zm-1 6h4m5-6h4m-4 3h4m-4 3h4', color: 'text-blue-500' },
-    { label: 'Código', icon: 'M8 9l-3 3 3 3m8-6l3 3-3 3M13 5l-2 14', color: 'text-emerald-600' },
+    { label: 'C├│digo', icon: 'M8 9l-3 3 3 3m8-6l3 3-3 3M13 5l-2 14', color: 'text-emerald-600' },
     { label: 'Nombre completo', icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z', color: 'text-amber-500' },
-    { label: 'Búsqueda por voz', icon: 'M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z', color: 'text-violet-500' },
-    { label: 'Historial académico', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z', color: 'text-slate-500' },
+    { label: 'B├║squeda por voz', icon: 'M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z', color: 'text-violet-500' },
+    { label: 'Historial acad├®mico', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z', color: 'text-slate-500' },
   ];
   return (
     <div className="relative overflow-hidden rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] px-5 py-8 sm:px-8 text-center shadow-[0_24px_60px_-24px_rgba(100,116,139,0.25)]">
-      {/* Iluminación mínima: halo tenue + viñeta clara */}
+      {/* Iluminaci├│n m├¡nima: halo tenue + vi├▒eta clara */}
       <div aria-hidden="true" className="pointer-events-none absolute inset-0">
         <div className="absolute -top-32 left-1/2 h-48 w-[36rem] -translate-x-1/2 rounded-full bg-amber-200/30 blur-3xl" />
         <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-slate-200/60 to-transparent" />
       </div>
 
       <div className="relative">
-        {/* Escena: observaciones / libros+laptop / boletín / créditos+historial */}
+        {/* Escena: observaciones / libros+laptop / bolet├¡n / cr├®ditos+historial */}
         <div className="relative mx-auto flex max-w-[760px] items-end justify-center gap-3 sm:gap-0">
           {/* Hojas decorativas */}
           <div aria-hidden="true" className="pointer-events-none absolute -left-2 bottom-6 hidden opacity-40 md:block">
@@ -288,20 +191,20 @@ function BoletinEmptyState() {
 
           {/* Libros + laptop grandes (decorado, izquierda) */}
           <div aria-hidden="true" className="pointer-events-none relative z-10 hidden w-64 shrink-0 items-end md:flex -mr-8">
-            {/* Fondo integrado: silueta académica + follaje + luz dorada tenue */}
+            {/* Fondo integrado: silueta acad├®mica + follaje + luz dorada tenue */}
             <svg className="absolute -left-5 -top-12 h-24 w-24 rotate-[-10deg] text-slate-400/20" fill="currentColor" viewBox="0 0 24 24"><path d="M12 3L1 9l11 6 9-4.91V17h2V9L12 3zM5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82z" /></svg>
             <div className="absolute -left-2 bottom-0 opacity-70">
               <div className="h-24 w-3 rotate-[-18deg] rounded-full bg-slate-300" />
               <div className="ml-3 -mt-16 h-16 w-2.5 rotate-[-36deg] rounded-full bg-slate-200" />
               <div className="-ml-1 -mt-12 h-12 w-2 rotate-[-4deg] rounded-full bg-[#c9d2c0]" />
             </div>
-            {/* Tarjeta secundaria con contenido, detrás de la laptop */}
+            {/* Tarjeta secundaria con contenido, detr├ís de la laptop */}
             <div className="absolute -top-7 right-4 z-0 w-32 rotate-[5deg] rounded-xl border border-[#DDE3EA] bg-white/95 p-2.5 text-left opacity-90 shadow-[0_10px_30px_-12px_rgba(100,116,139,0.3)]">
               <p className="text-[8px] font-extrabold uppercase tracking-[0.18em] text-[#64748B]">Periodo actual</p>
               <p className="mt-0.5 text-sm font-extrabold text-[#111827]">2026-I</p>
               <div className="mt-1.5 space-y-1 border-t border-slate-200 pt-1.5">
-                <p className="text-[9px] font-semibold text-[#64748B]">5 módulos</p>
-                <p className="text-[9px] font-semibold text-[#64748B]">20 créditos</p>
+                <p className="text-[9px] font-semibold text-[#64748B]">5 m├│dulos</p>
+                <p className="text-[9px] font-semibold text-[#64748B]">20 cr├®ditos</p>
               </div>
             </div>
             <div className="mb-1 w-32">
@@ -323,7 +226,7 @@ function BoletinEmptyState() {
               </div>
               <div className="h-1.5 w-56 -translate-x-1 rounded-b-lg bg-gradient-to-b from-slate-300 to-slate-400" />
             </div>
-            {/* Portalápices + resplandor cálido como en la referencia */}
+            {/* Portal├ípices + resplandor c├ílido como en la referencia */}
             <div className="-ml-7 mb-1 hidden w-8 items-end justify-center lg:flex">
               <div className="relative flex h-11 w-7 items-end justify-center overflow-visible rounded-b-md border border-[#DDE3EA] bg-white pb-0 shadow-sm">
                 <span className="absolute -top-3 left-1 h-5 w-[3px] rotate-[-8deg] rounded-full bg-amber-500/80" />
@@ -334,18 +237,18 @@ function BoletinEmptyState() {
             <div aria-hidden="true" className="pointer-events-none absolute -bottom-4 left-10 h-16 w-72 rounded-full bg-amber-200/50 blur-2xl" />
           </div>
 
-          {/* Tarjeta central: Boletín de Estudiante */}
+          {/* Tarjeta central: Bolet├¡n de Estudiante */}
           <div className="relative z-20 w-full max-w-[310px] shrink-0 rounded-2xl border border-[#DDE3EA] bg-white p-4 text-left shadow-[0_18px_45px_-15px_rgba(100,116,139,0.35)] sm:-mx-2">
             <span aria-hidden="true" className="absolute -top-[3px] left-1/2 h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]" />
             <div className="mb-3 flex items-center gap-2">
               <span className="flex h-7 w-7 items-center justify-center rounded-full border border-amber-300/60 bg-amber-100">
                 <svg className="h-3.5 w-3.5 text-amber-600" fill="currentColor" viewBox="0 0 24 24"><path d="M12 3L1 9l11 6 9-4.91V17h2V9L12 3zM5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82z" /></svg>
               </span>
-              <p className="text-[11px] font-extrabold uppercase tracking-[0.18em] text-[#1F2937]">Boletín de Estudiante</p>
+              <p className="text-[11px] font-extrabold uppercase tracking-[0.18em] text-[#1F2937]">Bolet├¡n de Estudiante</p>
             </div>
             <div className="rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] p-3">
               <div className="mb-2 flex items-center justify-between">
-                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-[#64748B]">Módulo</p>
+                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-[#64748B]">M├│dulo</p>
                 <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-[#64748B]">Nota (20)</p>
               </div>
               <div className="space-y-2.5">
@@ -364,14 +267,14 @@ function BoletinEmptyState() {
             </div>
           </div>
 
-          {/* Columna derecha: Créditos + Historial */}
+          {/* Columna derecha: Cr├®ditos + Historial */}
           <div className="relative z-10 flex w-44 shrink-0 flex-col gap-4 sm:-ml-2">
             <div className="rounded-2xl border border-[#DDE3EA] bg-white p-3 text-left shadow-[0_10px_30px_-12px_rgba(100,116,139,0.25)]">
               <div className="mb-2 flex items-center gap-1.5">
                 <span className="flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-slate-100">
                   <svg className="h-3 w-3 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3l9 5-9 5-9-5 9-5zm0 0v2m9 3l-9 5-9-5m18 5l-9 5-9-5" /></svg>
                 </span>
-                <p className="text-[8px] font-extrabold uppercase tracking-[0.14em] text-[#1F2937]">Créditos Académicos</p>
+                <p className="text-[8px] font-extrabold uppercase tracking-[0.14em] text-[#1F2937]">Cr├®ditos Acad├®micos</p>
               </div>
               <div className="flex items-center gap-2.5">
                 <div className="relative h-16 w-16 shrink-0">
@@ -402,7 +305,7 @@ function BoletinEmptyState() {
             <div className="rounded-2xl border border-[#DDE3EA] bg-white p-3 text-left shadow-[0_10px_30px_-12px_rgba(100,116,139,0.25)]">
               <div className="mb-2 flex items-center gap-1.5">
                 <svg className="h-3.5 w-3 text-slate-500" fill="currentColor" viewBox="0 0 12 12"><rect x="0" y="6" width="2" height="6" rx="0.5" opacity="0.45" /><rect x="3" y="3" width="2" height="9" rx="0.5" opacity="0.6" /><rect x="6" y="7" width="2" height="5" rx="0.5" opacity="0.5" /><rect x="9" y="1" width="2" height="11" rx="0.5" /></svg>
-                <p className="text-[8px] font-extrabold uppercase tracking-[0.14em] text-[#1F2937]">Historial Académico</p>
+                <p className="text-[8px] font-extrabold uppercase tracking-[0.14em] text-[#1F2937]">Historial Acad├®mico</p>
               </div>
               <div className="flex h-12 items-end justify-between gap-1.5 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] px-2.5 pb-2 pt-2">
                 {[45, 60, 40, 70, 55, 85, 95].map((h, i) => (
@@ -418,22 +321,35 @@ function BoletinEmptyState() {
           Selecciona un estudiante para comenzar
         </h2>
         <p className="mx-auto mt-1.5 max-w-xl text-sm leading-relaxed text-[#64748B]">
-          Consulta sus notas, créditos, historial académico y observaciones en un solo lugar.
+          Consulta sus notas, cr├®ditos, historial acad├®mico y observaciones en un solo lugar.
         </p>
 
         {/* Chips */}
         <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
-          {chips.map((chip) => (
+          {chips.map((chip) => (chip.label === 'B├║squeda por voz' ? (
+            <button
+              key={chip.label}
+              type="button"
+              onClick={() => window.dispatchEvent(new Event(EVENTO_VOZ))}
+              title="Buscar estudiante por voz"
+              className="inline-flex items-center gap-2 rounded-full border border-violet-300 bg-white px-4 py-1.5 text-xs font-medium text-[#374151] shadow-sm cursor-pointer transition-colors hover:bg-violet-50 hover:border-violet-400"
+            >
+              <svg className={`h-4 w-4 ${chip.color}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d={chip.icon} /></svg>
+              {chip.label}
+            </button>
+          ) : (
             <span key={chip.label} className="inline-flex items-center gap-2 rounded-full border border-[#D7DEE7] bg-white px-4 py-1.5 text-xs font-medium text-[#374151] shadow-sm">
               <svg className={`h-4 w-4 ${chip.color}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d={chip.icon} /></svg>
               {chip.label}
             </span>
-          ))}
+          )))}
         </div>
       </div>
     </div>
   );
 }
+
+
 
 function Membrete() {
   return (
@@ -455,23 +371,21 @@ export function StudentReportCard() {
   const { user, openPasswordModal } = useAuth();
   const userRoles = user?.roles ? user.roles.map(r => typeof r === 'string' ? r : r.nombre || r.name) : [];
   const primaryRole = user?.is_superuser ? 'superadmin' : (userRoles.length > 0 ? userRoles[0] : (user?.role || 'invitado'));
-  const rolesConAcceso = ['admin', 'superadmin', 'director', 'coordinador_academico', 'secretaria_academica', 'registro', 'evaluacion'];
-  const isAdmin = rolesConAcceso.includes(primaryRole) || user?.is_superuser === true;
+  const isAdmin = primaryRole !== 'estudiante';
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);
 
   const [searchTerm, setSearchTerm] = useState('');
+  const sugerenciasVozRef = useRef(null); // { termino, lista } del ├║ltimo dictado
   const [allStudents, setAllStudents] = useState([]);
   const [filteredStudents, setFilteredStudents] = useState([]);
   const [selectedStudentId, setSelectedStudentId] = useState(null);
-  const [selectedStudent, setSelectedStudent] = useState(null);
   const [selectedStudentName, setSelectedStudentName] = useState('');
   const [searchLoading, setSearchLoading] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const searchRef = useRef(null);
-  const studentsAbortRef = useRef(null);
 
   const [busquedaCursos, setBusquedaCursos] = useState('');
   const [filtroEstado, setFiltroEstado] = useState('todos');
@@ -484,58 +398,41 @@ export function StudentReportCard() {
   });
 
   useEffect(() => {
-    if (!isAdmin) return undefined;
-    const controller = new AbortController();
-    studentsAbortRef.current = controller;
+    if (!isAdmin) return;
     const fetchStudents = async () => {
       setSearchLoading(true);
       try {
         const res = await fetch(`${API_BASE}/api/mod-gestion-academica/estudiantes/`, {
-          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-          signal: controller.signal
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
         });
-        if (!res.ok) throw new Error(`Error ${res.status}`);
-        const dbData = await res.json();
+        const dbData = res.ok ? await res.json() : [];
         setAllStudents(Array.isArray(dbData) ? dbData : []);
       } catch (e) {
-        if (e.name !== 'AbortError') {
-          console.error('Error fetching students', e);
-          setAllStudents([]);
-        }
-      } finally {
-        if (!controller.signal.aborted) setSearchLoading(false);
+        console.error('Error fetching students', e);
+        setAllStudents([]);
       }
+      setSearchLoading(false);
     };
     fetchStudents();
-    return () => controller.abort();
   }, [isAdmin]);
 
   useEffect(() => {
-    queueMicrotask(() => {
-      if (searchTerm.length >= 3) {
-        const val = searchTerm.trim().toLowerCase();
-        const term = searchTerm.trim();
-        const filtered = allStudents.filter(s => {
-          const nombres = (s.nombres || '').toLowerCase();
-          const apellidos = (s.apellidos || '').toLowerCase();
-          const nombreCompleto = `${s.nombres || ''} ${s.apellidos || ''}`.trim().toLowerCase();
-          const nombreInverso = `${s.apellidos || ''} ${s.nombres || ''}`.trim().toLowerCase();
-          return (
-            (s.dni && s.dni.includes(term)) ||
-            (nombres && nombres.includes(val)) ||
-            (apellidos && apellidos.includes(val)) ||
-            (nombreCompleto && nombreCompleto.includes(val)) ||
-            (nombreInverso && nombreInverso.includes(val)) ||
-            (s.codigo_estudiante && s.codigo_estudiante.toLowerCase().includes(val))
-          );
-        });
-        setFilteredStudents(filtered);
+    if (searchTerm.length >= 3) {
+      // Resultado de un dictado: se muestran las sugerencias por sonido calculadas para ese texto.
+      const voz = sugerenciasVozRef.current;
+      if (voz && voz.termino === searchTerm) {
+        setFilteredStudents(voz.lista);
         setShowDropdown(true);
-      } else {
-        setFilteredStudents([]);
-        setShowDropdown(false);
+        return;
       }
-    });
+      // Sin tildes ni signos y por palabras: sirve igual para lo escrito y lo dictado por voz.
+      const filtered = allStudents.filter(s => coincideEstudiante(s, searchTerm));
+      setFilteredStudents(filtered);
+      setShowDropdown(true);
+    } else {
+      setFilteredStudents([]);
+      setShowDropdown(false);
+    }
   }, [searchTerm, allStudents]);
 
   useEffect(() => {
@@ -550,7 +447,6 @@ export function StudentReportCard() {
 
   const handleSelectStudent = (student) => {
     setSelectedStudentId(student.id);
-    setSelectedStudent(student);
     setSelectedStudentName(`${student.apellidos}, ${student.nombres}`);
     setSearchTerm('');
     setShowDropdown(false);
@@ -566,9 +462,26 @@ export function StudentReportCard() {
     });
   };
 
+  // Resultado del dictado: con un ├║nico alumno abre su bolet├¡n; si hay varios, deja la lista.
+  const handleVoiceResult = (texto) => {
+    // Primero coincidencia exacta; si no hay, por sonido (los nombres se transcriben "como suenan").
+    const exactas = allStudents.filter(s => coincideEstudiante(s, texto));
+    const { unico, lista } = exactas.length > 0
+      ? { unico: exactas.length === 1 ? exactas[0] : null, lista: exactas }
+      : buscarPorVoz(allStudents, texto);
+    if (unico) {
+      handleSelectStudent(unico);
+      return 1;
+    }
+    const termino = texto.trim(); // se muestra tal cual se dijo
+    sugerenciasVozRef.current = { termino, lista };
+    setSearchTerm(termino);
+    setShowDropdown(true);
+    return lista.length;
+  };
+
   const handleClearSelection = () => {
     setSelectedStudentId(null);
-    setSelectedStudent(null);
     setSelectedStudentName('');
     setSearchTerm('');
     setData(null);
@@ -584,75 +497,69 @@ export function StudentReportCard() {
     });
   };
 
-  const effectiveStudentId = isAdmin ? selectedStudentId : user?.id;
-
+  // Un estudiante ve su propio bolet├¡n. Su cuenta (core_users) y su ficha (estudiantes) son
+  // tablas distintas: se enlazan por el correo, nunca por el id del usuario.
+  const [fichaPropiaId, setFichaPropiaId] = useState(null);
   useEffect(() => {
-    queueMicrotask(() => {
-      if (!effectiveStudentId) {
-        setLoading(false);
-        return;
-      }
-      const fetchBoletin = async () => {
-        setLoading(true);
-        setError(null);
-        try {
-          let real = null;
-          try {
-            const res = await fetch(
-              `${API_BASE}/api/mod-gestion-academica/estudiantes/${effectiveStudentId}/boletin`,
-              { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }
-            );
-            if (res.ok) {
-              real = await res.json();
-            }
-          } catch (err) {
-            console.warn('API /boletin no disponible o error:', err);
-          }
-
-          const notasJson = obtenerNotasPorCiclo(effectiveStudentId, selectedStudent, real);
-          if (notasJson) {
-            const periodoActual = resumenDesdeJson(notasJson);
-            if (real) {
-              setData({
-                ...real,
-                estudiante: { ...real.estudiante, periodo_codigo: notasJson.periodoActual },
-                cursos_periodo: periodoActual.cursos_periodo,
-                resumen: { ...real.resumen, ...periodoActual.resumen },
-                _notasJson: notasJson,
-              });
-            } else {
-              const boletinJson = generarBoletinDesdeJson(effectiveStudentId, selectedStudent, real);
-              if (boletinJson) {
-                setData(boletinJson);
-              } else {
-                throw new Error('No se pudo generar la información del boletín.');
-              }
-            }
-          } else if (real) {
-            const evaluacion = mockEvaluacion.evaluaciones(real).find(
-              e => e.codigo_estudiante === real.estudiante.codigo_estudiante
-                && e.periodo === real.estudiante.periodo_codigo
-            );
-            setData(evaluacion ? { ...real, ...evaluacion } : real);
-          } else {
-            throw new Error('No se encontró información del boletín para este estudiante.');
-          }
-        } catch (e) {
-          setError(e.message);
+    if (isAdmin || !user?.email) return;
+    (async () => {
+      try {
+        // Solo su propia ficha: el estudiante ya no puede leer el padr├│n completo.
+        const res = await fetch(`${API_BASE}/api/mod-gestion-academica/estudiantes/mi-ficha`, {
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        });
+        const propia = res.ok ? await res.json() : null;
+        if (propia?.id) {
+          setFichaPropiaId(propia.id);
+        } else {
+          setError('Tu cuenta no est├í vinculada a una ficha de estudiante. Pide a Secretar├¡a que registre tu correo en tu ficha.');
+          setLoading(false);
         }
+      } catch {
+        setError('No se pudo consultar tu ficha de estudiante.');
         setLoading(false);
-      };
-      fetchBoletin();
-    });
-  }, [effectiveStudentId, selectedStudent]);
+      }
+    })();
+  }, [isAdmin, user?.email]);
+
+  const effectiveStudentId = isAdmin ? selectedStudentId : fichaPropiaId;
 
   useEffect(() => {
-    queueMicrotask(() => {
-      setBusquedaCursos('');
-      setFiltroEstado('todos');
-      setOrdenCursos('nombre');
-    });
+    if (!effectiveStudentId) {
+      // El estudiante sigue "cargando" hasta que se resuelva su ficha (o se muestre el aviso).
+      if (isAdmin) setLoading(false); // eslint-disable-line react-hooks/set-state-in-effect
+      return;
+    }
+    const fetchBoletin = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        // Solo datos reales: los JSON de prueba (notasPorCiclo, mockEvaluacion) se eliminaron.
+        const res = await fetch(
+          `${API_BASE}/api/mod-gestion-academica/estudiantes/${effectiveStudentId}/boletin`,
+          { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }
+        );
+        if (!res.ok) {
+          throw new Error(res.status === 404
+            ? 'No se encontr├│ la ficha de este estudiante.'
+            : `El servicio de bolet├¡n respondi├│ ${res.status}.`);
+        }
+        setData(await res.json());
+      } catch (e) {
+        setError(e.message);
+      }
+      setLoading(false);
+    };
+    fetchBoletin();
+  }, [effectiveStudentId, isAdmin]);
+
+  useEffect(() => {
+    if (!data) return;
+    setBusquedaCursos(''); // eslint-disable-line react-hooks/set-state-in-effect
+    setFiltroEstado('todos');
+    setOrdenCursos('nombre');
   }, [data]);
+
 
   if (loading) {
     return (
@@ -745,6 +652,7 @@ export function StudentReportCard() {
               showDropdown={showDropdown}
               setShowDropdown={setShowDropdown}
               onSelect={handleSelectStudent}
+              onVoiceResult={handleVoiceResult}
               searchLoading={searchLoading}
               recentStudents={recentStudents}
               onRemoveRecent={handleRemoveRecent}
@@ -752,9 +660,9 @@ export function StudentReportCard() {
           </div>
         )}
         <div className="bg-white border border-slate-200 rounded-md py-16 text-center">
-          <div className="text-4xl mb-3">⚠️</div>
+          <div className="text-4xl mb-3">ÔÜá´©Å</div>
           <p className="text-slate-700 font-semibold">{error}</p>
-          <p className="text-slate-400 text-sm mt-2">Verifica que existan matrículas y evaluaciones registradas para este periodo.</p>
+          <p className="text-slate-400 text-sm mt-2">Verifica que existan matr├¡culas y evaluaciones registradas para este periodo.</p>
         </div>
       </div>
     );
@@ -771,6 +679,7 @@ export function StudentReportCard() {
             filteredStudents={filteredStudents}
             showDropdown={showDropdown}
             onSelect={handleSelectStudent}
+            onVoiceResult={handleVoiceResult}
             searchLoading={searchLoading}
             recentStudents={recentStudents}
             setShowDropdown={setShowDropdown}
@@ -795,6 +704,7 @@ export function StudentReportCard() {
               showDropdown={showDropdown}
               setShowDropdown={setShowDropdown}
               onSelect={handleSelectStudent}
+              onVoiceResult={handleVoiceResult}
               searchLoading={searchLoading}
               recentStudents={recentStudents}
               onRemoveRecent={handleRemoveRecent}
@@ -802,8 +712,8 @@ export function StudentReportCard() {
           </div>
         )}
         <div className="bg-white border border-slate-200 rounded-md py-16 text-center">
-          <div className="text-4xl mb-3 opacity-30">📄</div>
-          <p className="text-slate-600 font-medium">No hay información disponible.</p>
+          <div className="text-4xl mb-3 opacity-30">­ƒôä</div>
+          <p className="text-slate-600 font-medium">No hay informaci├│n disponible.</p>
         </div>
       </div>
     );
@@ -842,7 +752,7 @@ export function StudentReportCard() {
 
   const matriculaVigente = matricula_estado?.pago_matricula === true;
 
-  /* ===== DOCUMENTO HISTÓRICO POR CICLOS ===== */
+  /* ===== DOCUMENTO HIST├ôRICO POR CICLOS ===== */
   const listaCiclos = Array.isArray(ciclos) ? ciclos : [];
   const unidadesPlan = listaCiclos.flatMap(c => Array.isArray(c.unidades) ? c.unidades : []);
 
@@ -920,7 +830,7 @@ export function StudentReportCard() {
       {isAdmin && selectedStudentName && (
         <div className="no-print mb-6 bg-white border border-slate-200 rounded-md px-4 py-2.5 flex items-center justify-between">
           <p className="text-sm text-slate-600">
-            Viendo boletín de: <span className="font-semibold text-slate-900">{selectedStudentName}</span>
+            Viendo bolet├¡n de: <span className="font-semibold text-slate-900">{selectedStudentName}</span>
           </p>
           <button
             onClick={handleClearSelection}
@@ -939,6 +849,7 @@ export function StudentReportCard() {
             filteredStudents={filteredStudents}
             showDropdown={showDropdown}
             onSelect={handleSelectStudent}
+            onVoiceResult={handleVoiceResult}
             searchLoading={searchLoading}
             recentStudents={recentStudents}
             setShowDropdown={setShowDropdown}
@@ -972,15 +883,15 @@ export function StudentReportCard() {
           type="button"
           onClick={openPasswordModal}
           className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-primary text-xs font-semibold shadow-xs transition-colors cursor-pointer"
-          title="Seguridad y cambio de contraseña del estudiante"
+          title="Seguridad y cambio de contrase├▒a del estudiante"
         >
           <KeyRound size={14} className="text-primary" />
-          <span>Cambiar Contraseña</span>
+          <span>Cambiar Contrase├▒a</span>
         </button>
 
         <button onClick={handlePrint} className="btn-primary text-sm px-4 py-2 flex items-center gap-2 ml-auto">
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" /></svg>
-          Imprimir Boletín
+          Imprimir Bolet├¡n
         </button>
       </div>
 
@@ -1008,7 +919,7 @@ export function StudentReportCard() {
                 Emitido {estudiante.fecha_emision}
               </span>
               <span className={`text-[10px] font-bold uppercase tracking-wider rounded-full px-3 py-1 border ${matriculaVigente ? 'bg-emerald-400/90 text-slate-900 border-emerald-200' : 'bg-amber-400/90 text-slate-900 border-amber-200'}`}>
-                Matrícula {matriculaVigente ? 'vigente' : 'pendiente'}
+                Matr├¡cula {matriculaVigente ? 'vigente' : 'pendiente'}
               </span>
             </div>
           </div>
@@ -1037,7 +948,7 @@ export function StudentReportCard() {
               {estudiante.programa_nombre || 'Programa no registrado'}
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-x-6 gap-y-3 mt-5 text-left">
-              <InfoItem icon={Hash} label="Código" value={estudiante.codigo_estudiante} tone="blue" />
+              <InfoItem icon={Hash} label="C├│digo" value={estudiante.codigo_estudiante} tone="blue" />
               <InfoItem icon={IdCard} label="DNI" value={estudiante.dni} tone="cyan" />
               <InfoItem icon={Phone} label="Celular" value={estudiante.celular} tone="emerald" />
               <InfoItem icon={Mail} label="Email" value={estudiante.email_personal} tone="fuchsia" />
@@ -1045,14 +956,14 @@ export function StudentReportCard() {
           </div>
 
           <div className="text-center md:text-left md:border-l md:border-slate-200 md:pl-6 min-w-[160px]">
-            <p className="text-[10px] text-slate-400 uppercase font-bold tracking-[0.15em] mb-1.5">Condición académica</p>
+            <p className="text-[10px] text-slate-400 uppercase font-bold tracking-[0.15em] mb-1.5">Condici├│n acad├®mica</p>
             <span className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full border text-xs font-extrabold uppercase tracking-wider ${oficial ? 'bg-slate-100 border-slate-300 text-slate-700' : `shadow-card ${TONE_BADGE[condicion]}`}`}>
               <BadgeCheck className="w-4 h-4" strokeWidth={2.6} />
               {estado_academico || 'No registrada'}
             </span>
             {codigoVerificacion && (
               <p className="text-[10px] text-slate-400 mt-2.5 leading-snug">
-                Código de verificación<br />
+                C├│digo de verificaci├│n<br />
                 <span className="font-mono font-bold text-slate-600">{codigoVerificacion}</span>
               </p>
             )}
@@ -1068,7 +979,7 @@ export function StudentReportCard() {
             <RingProgress percent={promedioPct} color={promedioRef != null && promedioRef >= NOTA_MIN_APROBAR ? '#059669' : '#dc2626'} size="lg">
               <span className="text-center leading-none">
                 <span className={`block text-2xl font-extrabold ${promedioRef != null && promedioRef >= NOTA_MIN_APROBAR ? 'text-emerald-700' : 'text-red-600'}`}>
-                  {promedioRef ?? '—'}
+                  {promedioRef ?? 'ÔÇö'}
                 </span>
                 <span className="block text-[9px] font-bold uppercase tracking-wider text-slate-400 mt-1">de 20</span>
               </span>
@@ -1079,7 +990,7 @@ export function StudentReportCard() {
                 {valoracion.label}
               </span>
               {promedioAritmetico != null && promedioPonderado != null && promedioAritmetico !== promedioPonderado && (
-                <p className="text-[10px] text-slate-400 mt-1.5">Aritmético: <b className="text-slate-600">{promedioAritmetico}</b></p>
+                <p className="text-[10px] text-slate-400 mt-1.5">Aritm├®tico: <b className="text-slate-600">{promedioAritmetico}</b></p>
               )}
             </div>
           </div>
@@ -1099,7 +1010,7 @@ export function StudentReportCard() {
               </span>
             </div>
             {resumen.cursos_desaprobados > 0 && (
-              <p className="mt-2.5 text-[11px] text-amber-700 font-semibold">Requiere seguimiento académico.</p>
+              <p className="mt-2.5 text-[11px] text-amber-700 font-semibold">Requiere seguimiento acad├®mico.</p>
             )}
           </div>
 
@@ -1119,7 +1030,7 @@ export function StudentReportCard() {
               ></div>
             </div>
             <p className="text-[10px] text-slate-400 mt-2 font-semibold">
-              {creditosRestantes > 0 ? `Faltan ${creditosRestantes} créditos` : 'Plan completado'}
+              {creditosRestantes > 0 ? `Faltan ${creditosRestantes} cr├®ditos` : 'Plan completado'}
             </p>
           </div>
 
@@ -1164,7 +1075,7 @@ export function StudentReportCard() {
             <div className="min-w-0 mr-auto">
               <h4 className="font-extrabold text-sm uppercase tracking-wider">Notas por Ciclos</h4>
               <p className="text-[11px] text-white/80 mt-0.5 font-medium">
-                {listaCiclos.length} ciclo{listaCiclos.length !== 1 ? 's' : ''} · {unidadesPlan.length} unidad{unidadesPlan.length !== 1 ? 'es' : ''} didáctica{unidadesPlan.length !== 1 ? 's' : ''} · nota mínima aprobatoria {NOTA_MIN_APROBAR}/20
+                {listaCiclos.length} ciclo{listaCiclos.length !== 1 ? 's' : ''} ┬À {unidadesPlan.length} unidad{unidadesPlan.length !== 1 ? 'es' : ''} did├íctica{unidadesPlan.length !== 1 ? 's' : ''} ┬À nota m├¡nima aprobatoria {NOTA_MIN_APROBAR}/20
               </p>
             </div>
           </div>
@@ -1176,8 +1087,8 @@ export function StudentReportCard() {
                 type="text"
                 value={busquedaCursos}
                 onChange={(e) => setBusquedaCursos(e.target.value)}
-                placeholder="Buscar unidad didáctica"
-                aria-label="Buscar unidad didáctica"
+                placeholder="Buscar unidad did├íctica"
+                aria-label="Buscar unidad did├íctica"
                 className="w-48 sm:w-56 bg-white/20 border border-white/30 rounded-lg px-3 py-1.5 pl-8 text-xs text-white font-medium placeholder-white/70 outline-none focus:border-white/70 focus:bg-white/30"
               />
             </div>
@@ -1218,7 +1129,7 @@ export function StudentReportCard() {
                 <option className="text-slate-800" value="nombre">Curso A-Z</option>
                 <option className="text-slate-800" value="nota_desc">Nota mayor</option>
                 <option className="text-slate-800" value="nota_asc">Nota menor</option>
-                <option className="text-slate-800" value="creditos_desc">Más créditos</option>
+                <option className="text-slate-800" value="creditos_desc">M├ís cr├®ditos</option>
                 <option className="text-slate-800" value="estado">Por estado</option>
               </select>
               <ChevronDown className="w-3.5 h-3.5 text-white/80 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" strokeWidth={2.2} />
@@ -1279,13 +1190,13 @@ export function StudentReportCard() {
                 </div>
               </div>
               <p className="px-4 py-2.5 text-center text-[11px] text-slate-500 font-semibold border-t border-slate-100">
-                Escala de calificación: 0 a 20 &middot; Nota mínima aprobatoria: {NOTA_MIN_APROBAR}
+                Escala de calificaci├│n: 0 a 20 &middot; Nota m├¡nima aprobatoria: {NOTA_MIN_APROBAR}
               </p>
             </div>
 
             <div className={`boletin-section border-t mt-4 px-4 py-2.5 flex flex-wrap items-center gap-x-5 gap-y-1 text-[11px] ${oficial ? 'bg-slate-50 border-slate-200' : 'bg-white border-slate-200'}`}>
               <span className="text-slate-500 font-semibold">Mostrando {unidadesVisiblesTotal} de {unidadesPlan.length} unidades del plan</span>
-              <span className="ml-auto text-slate-400 font-semibold">Nota mínima aprobatoria: {NOTA_MIN_APROBAR}</span>
+              <span className="ml-auto text-slate-400 font-semibold">Nota m├¡nima aprobatoria: {NOTA_MIN_APROBAR}</span>
             </div>
           </div>
         )}
@@ -1296,7 +1207,7 @@ export function StudentReportCard() {
         <div className={`mb-5 boletin-section bg-white border rounded-xl overflow-hidden ${oficial ? 'border-slate-300 shadow' : 'border-amber-200 shadow-card-lg'}`}>
           <div className={`flex items-center gap-2.5 px-5 py-3 ${oficial ? 'bg-slate-50 border-b border-slate-200' : 'bg-gradient-to-r from-amber-50 to-orange-50 border-b border-amber-200'}`}>
             <MessageSquare className="w-4 h-4 text-amber-600 flex-shrink-0" strokeWidth={2.4} />
-            <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-amber-800">Observaciones de Secretaría Académica</p>
+            <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-amber-800">Observaciones de Secretar├¡a Acad├®mica</p>
           </div>
           <div className="p-5">
             <p className="text-sm text-slate-700 leading-relaxed">{observaciones}</p>
@@ -1311,20 +1222,20 @@ export function StudentReportCard() {
             <div className="w-full border-b border-slate-400 mb-1.5"></div>
             <p className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.15em]">Estudiante</p>
             <p className="text-[11px] text-slate-600 font-semibold mt-0.5">{estudiante.apellidos}, {estudiante.nombres}</p>
-            <p className="text-[10px] text-slate-400 mt-0.5">DNI: {estudiante.dni || '—'}</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">DNI: {estudiante.dni || 'ÔÇö'}</p>
           </div>
           <div>
             <div className="w-full border-b border-slate-400 mb-1.5"></div>
-            <p className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.15em]">Secretaría Académica</p>
+            <p className="text-[10px] text-slate-500 uppercase font-bold tracking-[0.15em]">Secretar├¡a Acad├®mica</p>
             <p className="text-[11px] text-slate-600 font-semibold mt-0.5">Firma y sello</p>
-            <p className="text-[10px] text-slate-400 mt-0.5">Fecha de emisión: {estudiante.fecha_emision}</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Fecha de emisi├│n: {estudiante.fecha_emision}</p>
           </div>
         </div>
 
         <p className="text-[10px] text-slate-400 text-center mt-6 pt-4 border-t border-slate-100 leading-relaxed">
-          Este boletín es un documento informativo generado por SIGA. No tiene validez oficial sin la firma y sello de la Secretaría Académica.
+          Este bolet├¡n es un documento informativo generado por SIGA. No tiene validez oficial sin la firma y sello de la Secretar├¡a Acad├®mica.
           <br />
-          Código de verificación: <span className="font-mono font-bold text-slate-500">{codigoVerificacion || 'N/D'}</span>
+          C├│digo de verificaci├│n: <span className="font-mono font-bold text-slate-500">{codigoVerificacion || 'N/D'}</span>
         </p>
       </section>
 
@@ -1350,9 +1261,9 @@ function DetalleUnidad({ u, cicloTitulo, oficial, getNotaChip, getBadgeColor }) 
   const colorBarra = (n) => (n == null ? 'bg-slate-200' : n >= NOTA_MIN_APROBAR ? 'bg-gradient-to-r from-emerald-400 to-teal-500' : 'bg-gradient-to-r from-red-400 to-rose-500');
 
   const capacidades = [
-    { key: 'C1', nombre: 'Comprensión y análisis', descriptor: 'Prueba escrita: resolución de casos y preguntas teóricas', ponderacion: '33.3%', nota: u.nota_c1 },
-    { key: 'C2', nombre: 'Aplicación práctica', descriptor: 'Actividades y prácticas en laboratorio o taller', ponderacion: '33.3%', nota: u.nota_c2 },
-    { key: 'C3', nombre: 'Producto y comunicación', descriptor: 'Proyecto integrador, portafolio y exposición', ponderacion: '33.3%', nota: u.nota_c3 },
+    { key: 'C1', nombre: 'Comprensi├│n y an├ílisis', descriptor: 'Prueba escrita: resoluci├│n de casos y preguntas te├│ricas', ponderacion: '33.3%', nota: u.nota_c1 },
+    { key: 'C2', nombre: 'Aplicaci├│n pr├íctica', descriptor: 'Actividades y pr├ícticas en laboratorio o taller', ponderacion: '33.3%', nota: u.nota_c2 },
+    { key: 'C3', nombre: 'Producto y comunicaci├│n', descriptor: 'Proyecto integrador, portafolio y exposici├│n', ponderacion: '33.3%', nota: u.nota_c3 },
   ];
   const registradas = capacidades.filter(c => c.nota != null);
   const conParciales = registradas.length > 0;
@@ -1371,21 +1282,21 @@ function DetalleUnidad({ u, cicloTitulo, oficial, getNotaChip, getBadgeColor }) 
   };
   const recomendacion = nota == null
     ? (u.estado === 'no_cursado'
-      ? 'Unidad incluida en el plan académico; aún no se encuentra matriculada. Al cursarla, el docente registrará las notas por capacidad.'
-      : 'La unidad está en curso. El detalle completo se habilitará cuando el docente registre las notas parciales o el promedio final.')
+      ? 'Unidad incluida en el plan acad├®mico; a├║n no se encuentra matriculada. Al cursarla, el docente registrar├í las notas por capacidad.'
+      : 'La unidad est├í en curso. El detalle completo se habilitar├í cuando el docente registre las notas parciales o el promedio final.')
     : aprobado
-      ? `Resultado acreditado. Se recomienda continuar con el siguiente ciclo, considerando que esta unidad aporta ${u.creditos ?? '—'} créditos al avance de su plan de estudios.`
+      ? `Resultado acreditado. Se recomienda continuar con el siguiente ciclo, considerando que esta unidad aporta ${u.creditos ?? 'ÔÇö'} cr├®ditos al avance de su plan de estudios.`
       : desaprobado
-        ? `Resultado no acreditado. El estudiante debe reinscribirse en la unidad o presentarse a la convocatoria de evaluación extraordinaria para recuperar ${u.creditos ?? '—'} créditos.`
-        : 'Resultado pendiente de consolidación por parte del docente responsable.';
+        ? `Resultado no acreditado. El estudiante debe reinscribirse en la unidad o presentarse a la convocatoria de evaluaci├│n extraordinaria para recuperar ${u.creditos ?? 'ÔÇö'} cr├®ditos.`
+        : 'Resultado pendiente de consolidaci├│n por parte del docente responsable.';
   const meta = [
-    { label: 'Código de unidad', value: u.codigo || '—' },
-    { label: 'Créditos', value: u.creditos ?? '—' },
-    { label: 'Horas de clase', value: u.horas != null ? `${u.horas} h` : '—' },
-    { label: 'Tipo de modalidad', value: u.tipo ? String(u.tipo).replace(/-/g, ' ') : '—' },
+    { label: 'C├│digo de unidad', value: u.codigo || 'ÔÇö' },
+    { label: 'Cr├®ditos', value: u.creditos ?? 'ÔÇö' },
+    { label: 'Horas de clase', value: u.horas != null ? `${u.horas} h` : 'ÔÇö' },
+    { label: 'Tipo de modalidad', value: u.tipo ? String(u.tipo).replace(/-/g, ' ') : 'ÔÇö' },
     { label: 'Docente responsable', value: u.docente || 'Por asignar' },
-    { label: 'Turno / Sección', value: (u.turno || u.seccion) ? `${u.turno || '—'} · Sección ${u.seccion || '—'}` : '—' },
-    { label: 'Periodo académico', value: u.periodo_codigo || '—' },
+    { label: 'Turno / Secci├│n', value: (u.turno || u.seccion) ? `${u.turno || 'ÔÇö'} ┬À Secci├│n ${u.seccion || 'ÔÇö'}` : 'ÔÇö' },
+    { label: 'Periodo acad├®mico', value: u.periodo_codigo || 'ÔÇö' },
     { label: 'Estado registral', value: u.estado === 'no_cursado' ? 'Sin cursar' : u.estado },
   ];
 
@@ -1394,10 +1305,10 @@ function DetalleUnidad({ u, cicloTitulo, oficial, getNotaChip, getBadgeColor }) 
       {/* Encabezado del detalle */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className={`text-[9px] font-extrabold uppercase tracking-[0.2em] ${esOficial ? 'text-slate-400' : 'text-primary/70'}`}>Ficha de evaluación</p>
+          <p className={`text-[9px] font-extrabold uppercase tracking-[0.2em] ${esOficial ? 'text-slate-400' : 'text-primary/70'}`}>Ficha de evaluaci├│n</p>
           <p className="text-sm font-extrabold text-slate-800 leading-snug">{u.nombre}</p>
           <p className="text-[10px] text-slate-500 mt-0.5">
-            {cicloTitulo || 'Ciclo'}{u.codigo ? ` · ${u.codigo}` : ''}{u.tipo ? ` · ${String(u.tipo).replace(/-/g, ' ')}` : ''}
+            {cicloTitulo || 'Ciclo'}{u.codigo ? ` ┬À ${u.codigo}` : ''}{u.tipo ? ` ┬À ${String(u.tipo).replace(/-/g, ' ')}` : ''}
           </p>
         </div>
         <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${getBadgeColor(u.estado)}`}>
@@ -1410,7 +1321,7 @@ function DetalleUnidad({ u, cicloTitulo, oficial, getNotaChip, getBadgeColor }) 
         <div className={`${caja} p-3`}>
           <p className={`text-[9px] font-extrabold uppercase tracking-[0.14em] ${esOficial ? 'text-slate-500' : 'text-primary'}`}>Nota final obtenida</p>
           <p className={`text-2xl font-extrabold mt-1 ${nota != null ? (aprobado ? 'text-emerald-700' : 'text-red-600') : 'text-slate-300'}`}>
-            {nota ?? '—'}<span className="text-xs font-bold text-slate-400">/20</span>
+            {nota ?? 'ÔÇö'}<span className="text-xs font-bold text-slate-400">/20</span>
           </p>
           <div className="mt-2 h-1.5 rounded-full bg-slate-100 overflow-hidden">
             <div className={`h-full rounded-full ${colorBarra(nota)}`} style={{ width: `${pctLogro}%` }}></div>
@@ -1418,23 +1329,23 @@ function DetalleUnidad({ u, cicloTitulo, oficial, getNotaChip, getBadgeColor }) 
           <p className="mt-1 text-[9px] text-slate-400">{nota != null ? `${pctLogro}% de logro` : 'Sin registro'}</p>
         </div>
         <div className={`${caja} p-3`}>
-          <p className={`text-[9px] font-extrabold uppercase tracking-[0.14em] ${esOficial ? 'text-slate-500' : 'text-primary'}`}>Mínimo aprobatorio</p>
+          <p className={`text-[9px] font-extrabold uppercase tracking-[0.14em] ${esOficial ? 'text-slate-500' : 'text-primary'}`}>M├¡nimo aprobatorio</p>
           <p className="text-2xl font-extrabold mt-1 text-slate-700">{NOTA_MIN_APROBAR}<span className="text-xs font-bold text-slate-400">/20</span></p>
-          <p className="mt-2 text-[9px] text-slate-500 leading-tight">Escala vigesimal institucional. Brecha: <b className={brecha == null ? 'text-slate-400' : brecha >= 0 ? 'text-emerald-700' : 'text-red-600'}>{brecha == null ? '—' : `${brecha > 0 ? '+' : ''}${brecha} pts`}</b></p>
+          <p className="mt-2 text-[9px] text-slate-500 leading-tight">Escala vigesimal institucional. Brecha: <b className={brecha == null ? 'text-slate-400' : brecha >= 0 ? 'text-emerald-700' : 'text-red-600'}>{brecha == null ? 'ÔÇö' : `${brecha > 0 ? '+' : ''}${brecha} pts`}</b></p>
         </div>
         <div className={`${caja} p-3`}>
           <p className={`text-[9px] font-extrabold uppercase tracking-[0.14em] ${esOficial ? 'text-slate-500' : 'text-primary'}`}>Efecto en el plan</p>
           <p className={`text-sm font-extrabold mt-1 ${aprobado ? 'text-emerald-700' : desaprobado ? 'text-red-600' : 'text-slate-500'}`}>
-            {nota == null ? 'Pendiente' : aprobado ? `${u.creditos ?? '—'} cr. acreditados` : `${u.creditos ?? '—'} cr. no acreditados`}
+            {nota == null ? 'Pendiente' : aprobado ? `${u.creditos ?? 'ÔÇö'} cr. acreditados` : `${u.creditos ?? 'ÔÇö'} cr. no acreditados`}
           </p>
-          <p className="mt-2 text-[9px] text-slate-500 leading-tight">Los créditos se reconocen únicamente al superar el mínimo aprobatorio.</p>
+          <p className="mt-2 text-[9px] text-slate-500 leading-tight">Los cr├®ditos se reconocen ├║nicamente al superar el m├¡nimo aprobatorio.</p>
         </div>
       </div>
 
-      {/* Sección 1: desglose por capacidades */}
+      {/* Secci├│n 1: desglose por capacidades */}
       <div className={caja}>
         <div className={`px-3 py-2 border-b ${esOficial ? 'border-slate-200 bg-slate-100' : 'border-primary/10 bg-primary/5'} rounded-t-xl`}>
-          <p className={tituloSeccion}>1 · Desglose por capacidades</p>
+          <p className={tituloSeccion}>1 ┬À Desglose por capacidades</p>
         </div>
         <div className="divide-y divide-slate-100">
           {capacidades.map(c => {
@@ -1451,9 +1362,9 @@ function DetalleUnidad({ u, cicloTitulo, oficial, getNotaChip, getBadgeColor }) 
                     <p className="text-[9px] text-slate-400 mt-0.5">{c.descriptor}</p>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className="text-[9px] font-bold text-slate-400">Ponderación {c.ponderacion}</span>
+                    <span className="text-[9px] font-bold text-slate-400">Ponderaci├│n {c.ponderacion}</span>
                     <span className={`inline-flex items-center justify-center min-w-[38px] px-2 py-0.5 rounded-md text-[13px] font-extrabold ${getNotaChip(c.nota)}`}>
-                      {c.nota ?? '—'}
+                      {c.nota ?? 'ÔÇö'}
                     </span>
                     <span className={`text-[9px] font-bold ${est.color}`}>{est.texto}</span>
                   </div>
@@ -1467,10 +1378,10 @@ function DetalleUnidad({ u, cicloTitulo, oficial, getNotaChip, getBadgeColor }) 
         </div>
       </div>
 
-      {/* Sección 2: cálculo */}
+      {/* Secci├│n 2: c├ílculo */}
       <div className={caja}>
         <div className={`px-3 py-2 border-b ${esOficial ? 'border-slate-200 bg-slate-100' : 'border-primary/10 bg-primary/5'} rounded-t-xl`}>
-          <p className={tituloSeccion}>2 · Cálculo de la nota final</p>
+          <p className={tituloSeccion}>2 ┬À C├ílculo de la nota final</p>
         </div>
         <div className="px-3 py-3 space-y-2">
           {conParciales ? (
@@ -1480,66 +1391,66 @@ function DetalleUnidad({ u, cicloTitulo, oficial, getNotaChip, getBadgeColor }) 
                 {capacidades.map((c, i) => (
                   <Fragment key={c.key}>
                     <span className={`px-1.5 py-0.5 rounded font-extrabold text-[12px] ${c.nota != null ? (c.nota >= NOTA_MIN_APROBAR ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-700') : 'bg-slate-50 text-slate-400'}`}>
-                      {c.nota ?? '—'}
+                      {c.nota ?? 'ÔÇö'}
                     </span>
                     {i < capacidades.length - 1 && <span className="font-bold text-slate-400">+</span>}
                   </Fragment>
                 ))}
-                <span className="font-semibold">) ÷ {registradas.length} = <b>{(sumaParciales / registradas.length).toFixed(2)}</b> → redondeo → <b className={aprobado ? 'text-emerald-700' : 'text-red-600'}>{promCalculado}</b></span>
+                <span className="font-semibold">) ├À {registradas.length} = <b>{(sumaParciales / registradas.length).toFixed(2)}</b> ÔåÆ redondeo ÔåÆ <b className={aprobado ? 'text-emerald-700' : 'text-red-600'}>{promCalculado}</b></span>
               </div>
               <ul className="text-[10px] text-slate-500 space-y-1 leading-relaxed">
-                <li>• Cada capacidad aporta en partes iguales (33.3%) al promedio del curso.</li>
-                <li>• Se promedian solo las capacidades registradas ({registradas.length} de 3) y se redondea al entero más cercano.</li>
-                <li>• {coincide
-                  ? 'El promedio del sistema coincide con el cálculo mostrado; la nota final es consistente.'
+                <li>ÔÇó Cada capacidad aporta en partes iguales (33.3%) al promedio del curso.</li>
+                <li>ÔÇó Se promedian solo las capacidades registradas ({registradas.length} de 3) y se redondea al entero m├ís cercano.</li>
+                <li>ÔÇó {coincide
+                  ? 'El promedio del sistema coincide con el c├ílculo mostrado; la nota final es consistente.'
                   : 'La nota final fue fijada por el docente responsable y puede diferir del promedio simple de las capacidades.'}</li>
               </ul>
             </>
           ) : nota != null ? (
             <>
               <p className="text-[12px] text-slate-700 font-semibold">
-                El docente registró el Promedio Final directamente: <b className={aprobado ? 'text-emerald-700' : 'text-red-600'}>{nota}/20</b>
+                El docente registr├│ el Promedio Final directamente: <b className={aprobado ? 'text-emerald-700' : 'text-red-600'}>{nota}/20</b>
               </p>
               <ul className="text-[10px] text-slate-500 space-y-1 leading-relaxed">
-                <li>• No existe desglose por capacidades (C1/C2/C3) para esta unidad.</li>
-                <li>• La nota corresponde al promedio consolidado del curso registrado en el acta del docente.</li>
+                <li>ÔÇó No existe desglose por capacidades (C1/C2/C3) para esta unidad.</li>
+                <li>ÔÇó La nota corresponde al promedio consolidado del curso registrado en el acta del docente.</li>
               </ul>
             </>
           ) : (
             <>
-              <p className="text-[12px] text-slate-600 font-semibold">Sin registro de evaluación</p>
+              <p className="text-[12px] text-slate-600 font-semibold">Sin registro de evaluaci├│n</p>
               <ul className="text-[10px] text-slate-500 space-y-1 leading-relaxed">
-                <li>• Esta unidad aún no tiene notas asociadas al estudiante.</li>
-                <li>• El desglose aparecerá automáticamente cuando el docente registre las capacidades o el promedio final.</li>
+                <li>ÔÇó Esta unidad a├║n no tiene notas asociadas al estudiante.</li>
+                <li>ÔÇó El desglose aparecer├í autom├íticamente cuando el docente registre las capacidades o el promedio final.</li>
               </ul>
             </>
           )}
         </div>
       </div>
 
-      {/* Sección 3: efecto académico */}
+      {/* Secci├│n 3: efecto acad├®mico */}
       <div className={caja}>
         <div className={`px-3 py-2 border-b ${esOficial ? 'border-slate-200 bg-slate-100' : 'border-primary/10 bg-primary/5'} rounded-t-xl`}>
-          <p className={tituloSeccion}>3 · Interpretación y recomendación</p>
+          <p className={tituloSeccion}>3 ┬À Interpretaci├│n y recomendaci├│n</p>
         </div>
         <div className="px-3 py-3 space-y-2">
           <p className="text-[10px] text-slate-500 leading-relaxed">
-            <b className="text-slate-600">Regla institucional:</b> se acredita la unidad con {NOTA_MIN_APROBAR}/20 o más.{' '}
+            <b className="text-slate-600">Regla institucional:</b> se acredita la unidad con {NOTA_MIN_APROBAR}/20 o m├ís.{' '}
             {nota != null && (aprobado
-              ? `Al obtener ${nota} puntos, el estudiante supera el mínimo por ${brecha} punto${brecha === 1 ? '' : 's'} y sus ${u.creditos ?? '—'} créditos se suman al avance de su plan.`
-              : `Al obtener ${nota} puntos, el estudiante no alcanza el mínimo; faltan ${Math.abs(brecha)} punto${Math.abs(brecha) === 1 ? '' : 's'} para acreditar ${u.creditos ?? '—'} créditos.`)}
+              ? `Al obtener ${nota} puntos, el estudiante supera el m├¡nimo por ${brecha} punto${brecha === 1 ? '' : 's'} y sus ${u.creditos ?? 'ÔÇö'} cr├®ditos se suman al avance de su plan.`
+              : `Al obtener ${nota} puntos, el estudiante no alcanza el m├¡nimo; faltan ${Math.abs(brecha)} punto${Math.abs(brecha) === 1 ? '' : 's'} para acreditar ${u.creditos ?? 'ÔÇö'} cr├®ditos.`)}
           </p>
           <div className={`rounded-lg border px-3 py-2 ${esOficial ? 'bg-white border-slate-200' : 'bg-white border-primary/10'}`}>
-            <p className="text-[9px] font-extrabold uppercase tracking-[0.14em] text-slate-400 mb-1">Recomendación académica</p>
+            <p className="text-[9px] font-extrabold uppercase tracking-[0.14em] text-slate-400 mb-1">Recomendaci├│n acad├®mica</p>
             <p className="text-[11px] text-slate-700 leading-relaxed">{recomendacion}</p>
           </div>
         </div>
       </div>
 
-      {/* Sección 4: trazabilidad */}
+      {/* Secci├│n 4: trazabilidad */}
       <div className={caja}>
         <div className={`px-3 py-2 border-b ${esOficial ? 'border-slate-200 bg-slate-100' : 'border-primary/10 bg-primary/5'} rounded-t-xl`}>
-          <p className={tituloSeccion}>4 · Trazabilidad del registro</p>
+          <p className={tituloSeccion}>4 ┬À Trazabilidad del registro</p>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-2.5 px-3 py-3">
           {meta.map(m => (
@@ -1550,7 +1461,7 @@ function DetalleUnidad({ u, cicloTitulo, oficial, getNotaChip, getBadgeColor }) 
           ))}
         </div>
         <p className={`px-3 pb-3 text-[9px] ${esOficial ? 'text-slate-400' : 'text-slate-400'} leading-relaxed`}>
-          Información generada por SIGA a partir de los registros de matrícula y evaluación del periodo académico. Conforme al Reglamento de Evaluación y Promoción del Estudiante.
+          Informaci├│n generada por SIGA a partir de los registros de matr├¡cula y evaluaci├│n del periodo acad├®mico. Conforme al Reglamento de Evaluaci├│n y Promoci├│n del Estudiante.
         </p>
       </div>
     </div>
@@ -1572,8 +1483,8 @@ function CicloCard({ ciclo, oficial, getNotaChip, getBadgeColor }) {
       <table className="w-full text-left boletin-table">
         <thead>
           <tr className={`${oficial ? 'bg-slate-100 border-b border-slate-200' : 'bg-primary/10 border-b border-primary/20'}`}>
-            <th className={`py-2.5 px-3 font-extrabold uppercase text-[10px] tracking-[0.14em] ${oficial ? 'text-slate-600' : 'text-primary-dark'}`}>Unidad Didáctica</th>
-            <th className={`py-2.5 px-2 font-extrabold uppercase text-[10px] tracking-[0.14em] text-center ${oficial ? 'text-slate-600' : 'text-primary-dark'}`}>Créd.</th>
+            <th className={`py-2.5 px-3 font-extrabold uppercase text-[10px] tracking-[0.14em] ${oficial ? 'text-slate-600' : 'text-primary-dark'}`}>Unidad Did├íctica</th>
+            <th className={`py-2.5 px-2 font-extrabold uppercase text-[10px] tracking-[0.14em] text-center ${oficial ? 'text-slate-600' : 'text-primary-dark'}`}>Cr├®d.</th>
             <th className={`py-2.5 px-2 font-extrabold uppercase text-[10px] tracking-[0.14em] text-center ${oficial ? 'text-slate-600' : 'text-primary-dark'}`}>Nota</th>
             <th className={`py-2.5 px-2 font-extrabold uppercase text-[10px] tracking-[0.14em] text-center ${oficial ? 'text-slate-600' : 'text-primary-dark'}`}>Estado</th>
           </tr>
@@ -1592,21 +1503,21 @@ function CicloCard({ ciclo, oficial, getNotaChip, getBadgeColor }) {
                   tabIndex={0}
                   role="button"
                   aria-expanded={abiertaFila}
-                  title="Ver detalle del porqué de la nota"
+                  title="Ver detalle del porqu├® de la nota"
                 >
                   <td className={`py-2.5 px-3 border-l-[4px] text-[13px] font-semibold text-slate-800 ${aprobado ? 'border-l-emerald-500' : desaprobado ? 'border-l-red-500' : 'border-l-slate-300'}`}>
                     <span className="flex items-center gap-1.5">
-                      <span className={`inline-block text-[9px] text-slate-400 transition-transform ${abiertaFila ? 'rotate-90' : ''}`}>▶</span>
+                      <span className={`inline-block text-[9px] text-slate-400 transition-transform ${abiertaFila ? 'rotate-90' : ''}`}>ÔûÂ</span>
                       <span className="flex-1">
                         {u.nombre}
                         {u.codigo && <span className="ml-1.5 text-[9px] font-normal text-slate-400">{u.codigo}</span>}
                       </span>
                     </span>
                   </td>
-                  <td className="py-2.5 px-2 text-center text-slate-600 font-semibold text-[13px]">{u.creditos ?? '—'}</td>
+                  <td className="py-2.5 px-2 text-center text-slate-600 font-semibold text-[13px]">{u.creditos ?? 'ÔÇö'}</td>
                   <td className="py-2.5 px-2 text-center">
                     <span className={`inline-flex items-center justify-center min-w-[38px] px-2 py-0.5 rounded-md text-[13px] font-extrabold ${getNotaChip(u.nota)}`}>
-                      {u.nota ?? '—'}
+                      {u.nota ?? 'ÔÇö'}
                     </span>
                   </td>
                   <td className="py-2.5 px-2 text-center">
@@ -1646,86 +1557,50 @@ function CicloCard({ ciclo, oficial, getNotaChip, getBadgeColor }) {
   );
 }
 
-function StudentSearchBar({ searchTerm, setSearchTerm, filteredStudents, showDropdown, onSelect, searchLoading, recentStudents, setShowDropdown, onRemoveRecent }) {
-  const [listening, setListening] = useState(false);
-  const [voiceMsg, setVoiceMsg] = useState('');
-  const recognitionRef = useRef(null);
-
-  useEffect(() => {
-    return () => {
-      try { recognitionRef.current?.abort?.(); } catch { /* noop */ }
-    };
-  }, []);
+function StudentSearchBar({ searchTerm, setSearchTerm, filteredStudents, showDropdown, onSelect, onVoiceResult, searchLoading, recentStudents, setShowDropdown, onRemoveRecent }) {
+  const [resultadoVoz, setResultadoVoz] = useState('');
+  const { escuchando, estado, esError, alternar } = useDictado({
+    // Todo lo que la persona dice se escribe en vivo en el buscador.
+    onTexto: (texto) => {
+      setSearchTerm(texto);
+      setShowDropdown?.(true);
+    },
+    onFinal: (texto) => {
+      if (onVoiceResult) {
+        const total = onVoiceResult(texto);
+        setResultadoVoz(total === 0
+          ? `Escuch├® "${texto}", pero no hay estudiantes que coincidan.`
+          : total === 1 ? '' : `Escuch├® "${texto}": ${total} estudiantes coinciden, elige uno de la lista.`);
+      } else {
+        setSearchTerm(texto);
+      }
+    },
+  });
 
   const handleVoiceSearch = () => {
-    try {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SpeechRecognition) {
-        setVoiceMsg('Búsqueda por voz no disponible en este dispositivo.');
-        return;
-      }
-      // Si ya está escuchando, cancelar (permite probar "cancelar reconocimiento")
-      if (listening && recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch { /* noop */ }
-        return;
-      }
-      const recognition = new SpeechRecognition();
-      recognitionRef.current = recognition;
-      recognition.lang = 'es-PE';
-      recognition.interimResults = false;
-      recognition.maxAlternatives = 1;
-
-      recognition.onstart = () => {
-        setListening(true);
-        setVoiceMsg('Escuchando...');
-      };
-      recognition.onresult = (event) => {
-        const text = event.results?.[0]?.[0]?.transcript || '';
-        if (text.trim()) {
-          // Reutiliza el MISMO searchTerm del buscador existente:
-          // el useEffect de filtrado (DNI, código, nombres, apellidos) reacciona solo.
-          setSearchTerm(text.trim());
-          setVoiceMsg('');
-        } else {
-          setVoiceMsg('No se pudo reconocer la voz. Inténtalo nuevamente.');
-        }
-      };
-      recognition.onerror = (event) => {
-        const err = event?.error;
-        if (err === 'not-allowed' || err === 'service-not-allowed') {
-          setVoiceMsg('Permiso de micrófono denegado.');
-        } else if (err === 'no-speech' || err === 'audio-capture' || err === 'no-match') {
-          setVoiceMsg('No se pudo reconocer la voz. Inténtalo nuevamente.');
-        } else if (err === 'aborted') {
-          setVoiceMsg('');
-        } else {
-          setVoiceMsg('No se pudo reconocer la voz. Inténtalo nuevamente.');
-        }
-        setListening(false);
-      };
-      recognition.onend = () => {
-        setListening(false);
-        setVoiceMsg((prev) => (prev === 'Escuchando...' ? '' : prev));
-      };
-
-      recognition.start();
-    } catch {
-      // No romper nunca el buscador escrito
-      setListening(false);
-      setVoiceMsg('No se pudo reconocer la voz. Inténtalo nuevamente.');
-    }
+    setResultadoVoz('');
+    alternar();
   };
+
+  useEffect(() => {
+    // La etiqueta "B├║squeda por voz" de la pantalla inicial tambi├®n enciende el micr├│fono.
+    const alPedirVoz = () => { if (!escuchando) handleVoiceSearch(); };
+    window.addEventListener(EVENTO_VOZ, alPedirVoz);
+    return () => window.removeEventListener(EVENTO_VOZ, alPedirVoz);
+  });
+
+  const mensajeVoz = estado || resultadoVoz;
   const showRecent = showDropdown && searchTerm.length === 0 && recentStudents.length > 0;
   const showResults = showDropdown && searchTerm.length >= 3;
 
   return (
     <div className="relative">
       <div className="bg-white border border-slate-200 rounded-md flex items-center gap-2 px-4 py-2 shadow-sm">
-        <span className="px-1 text-slate-400 text-lg">🔍</span>
+        <span className="px-1 text-slate-400 text-lg">­ƒöì</span>
         <input
           type="text"
           className="w-full bg-transparent border-none focus:ring-0 py-1.5 text-slate-700 placeholder-slate-400 outline-none text-sm"
-          placeholder="Buscar estudiante por DNI, nombre, apellido o código..."
+          placeholder="Buscar estudiante por DNI, nombre, apellido o c├│digo..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           onFocus={() => setShowDropdown?.(true)}
@@ -1735,14 +1610,14 @@ function StudentSearchBar({ searchTerm, setSearchTerm, filteredStudents, showDro
           type="button"
           onClick={handleVoiceSearch}
           aria-label="Buscar estudiante por voz"
-          title={listening ? 'Escuchando... pulsa para cancelar' : 'Buscar estudiante por voz'}
+          title={escuchando ? 'Escuchando... pulsa para terminar' : 'Buscar estudiante por voz'}
           className={`relative flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full border transition-colors cursor-pointer ${
-            listening
+            escuchando
               ? 'bg-red-50 border-red-300 text-red-600 animate-pulse'
               : 'border-slate-200 text-slate-500 hover:text-primary hover:border-primary/40 hover:bg-primary/5'
           }`}
         >
-          {listening && (
+          {escuchando && (
             <span className="absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-30 animate-ping"></span>
           )}
           <svg className="relative w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1750,10 +1625,10 @@ function StudentSearchBar({ searchTerm, setSearchTerm, filteredStudents, showDro
           </svg>
         </button>
       </div>
-      {(voiceMsg || listening) && (
-        <p className={`mt-1.5 ml-1 text-xs font-medium flex items-center gap-1.5 ${listening ? 'text-red-600' : 'text-slate-500'}`} role="status" aria-live="polite">
-          {listening && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>}
-          {voiceMsg || 'Escuchando...'}
+      {(mensajeVoz || escuchando) && (
+        <p className={`mt-1.5 ml-1 text-xs font-medium flex items-center gap-1.5 ${esError ? 'text-red-600' : escuchando ? 'text-red-600' : 'text-slate-500'}`} role="status" aria-live="polite">
+          {escuchando && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>}
+          {mensajeVoz || 'Escuchando... habla ahora.'}
         </p>
       )}
 
@@ -1770,7 +1645,7 @@ function StudentSearchBar({ searchTerm, setSearchTerm, filteredStudents, showDro
                 className="flex-1 text-left cursor-pointer"
               >
                 <p className="font-semibold text-slate-800 text-sm">{student.apellidos}, {student.nombres}</p>
-                <p className="text-[10px] text-slate-400 mt-0.5 uppercase tracking-wider">Cód: {student.codigo_estudiante}</p>
+                <p className="text-[10px] text-slate-400 mt-0.5 uppercase tracking-wider">C├│d: {student.codigo_estudiante}</p>
               </button>
               <button
                 type="button"
@@ -1797,7 +1672,7 @@ function StudentSearchBar({ searchTerm, setSearchTerm, filteredStudents, showDro
               className="w-full text-left px-4 py-2.5 hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-b-0 cursor-pointer"
             >
               <p className="font-semibold text-slate-800 text-sm">{student.apellidos}, {student.nombres}</p>
-              <p className="text-[10px] text-slate-400 mt-0.5 uppercase tracking-wider">Cód: {student.codigo_estudiante} · DNI: {student.dni}</p>
+              <p className="text-[10px] text-slate-400 mt-0.5 uppercase tracking-wider">C├│d: {student.codigo_estudiante} ┬À DNI: {student.dni}</p>
             </button>
           ))}
         </div>

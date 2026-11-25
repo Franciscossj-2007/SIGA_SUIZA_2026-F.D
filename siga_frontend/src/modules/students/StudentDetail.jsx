@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { API_BASE } from '../../core/api/client';
-import { getProgramaLabel } from '../../core/catalog/programas';
+import { usePrograms } from '../../core/api/usePrograms';
 import techBg from '../../assets/tech-bg.jpg';
 import { ProtectedImage } from './ProtectedImage';
 import {
@@ -99,37 +99,34 @@ function EmptyState({ icon: Icon, title, description }) {
 }
 
 export function StudentDetail({ student, onClose }) {
+  const PROGRAMAS = Object.fromEntries(usePrograms().map(p => [p.id, p.nombre]));
   const [detail, setDetail] = useState(null);
   const [matriculas, setMatriculas] = useState([]);
   const [beneficios, setBeneficios] = useState([]);
   const [convalidaciones, setConvalidaciones] = useState([]);
   const [tramites, setTramites] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState('expediente');
-  const [now, setNow] = useState(null);
 
   useEffect(() => {
-    if (!student?.id) return undefined;
-    const controller = new AbortController();
+    if (!student?.id) return;
+    let cancelled = false;
 
     async function fetchAll() {
       setLoading(true);
-      setError('');
       const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` };
-      const options = { headers, signal: controller.signal };
       const base = `${API_BASE}/api/mod-gestion-academica`;
 
       try {
         const [detailRes, matRes, benRes, convRes, tramRes] = await Promise.allSettled([
-          fetch(`${base}/estudiantes/${student.id}`, options),
-          fetch(`${base}/matriculas/estudiante/${student.id}`, options),
-          fetch(`${base}/beneficios/estudiante/${student.id}`, options),
-          fetch(`${base}/convalidaciones/estudiante/${student.id}`, options),
-          fetch(`${base}/tramites/`, options),
+          fetch(`${base}/estudiantes/${student.id}`, { headers }),
+          fetch(`${base}/matriculas/estudiante/${student.id}`, { headers }),
+          fetch(`${base}/beneficios/estudiante/${student.id}`, { headers }),
+          fetch(`${base}/convalidaciones/estudiante/${student.id}`, { headers }),
+          fetch(`${base}/tramites/`, { headers }),
         ]);
 
-        if (controller.signal.aborted) return;
+        if (cancelled) return;
 
         if (detailRes.status === 'fulfilled' && detailRes.value.ok) {
           setDetail(await detailRes.value.json());
@@ -158,19 +155,16 @@ export function StudentDetail({ student, onClose }) {
             setTramites(allTramites.filter(t => t.estudiante_id === student.id));
           }
         }
-      } catch (e) {
-        if (e.name !== 'AbortError') {
-          setDetail(student);
-          setError('No se pudo cargar toda la información del estudiante.');
-        }
+      } catch {
+        setDetail(student);
       }
 
-      if (!controller.signal.aborted) setLoading(false);
+      if (!cancelled) setLoading(false);
     }
 
     fetchAll();
-    return () => controller.abort();
-  }, [student]);
+    return () => { cancelled = true; };
+  }, [student?.id]);
 
   useEffect(() => {
     if (!student) return;
@@ -187,24 +181,22 @@ export function StudentDetail({ student, onClose }) {
     return () => window.removeEventListener('keydown', handleKey);
   }, [onClose]);
 
-  useEffect(() => {
-    queueMicrotask(() => setNow(Date.now()));
-  }, []);
-
   if (!student) return null;
 
   const s = detail || student;
   const initials = `${(s.nombres || '')[0] || ''}${(s.apellidos || '')[0] || ''}`.toUpperCase();
-  const programaNombre = s.programa_id ? getProgramaLabel(s.programa_id) : 'Sin carrera asignada';
+  const programaNombre = PROGRAMAS[s.programa_id] || (s.programa_id ? `Programa ${s.programa_id}` : 'Sin carrera asignada');
 
   const fechaNac = s.fecha_nacimiento
     ? new Date(s.fecha_nacimiento + 'T00:00:00').toLocaleDateString('es-PE', { day: '2-digit', month: 'long', year: 'numeric' })
     : null;
 
-  const edad = s.fecha_nacimiento && now ? (() => {
-    const diff = now - new Date(s.fecha_nacimiento).getTime();
-    const ageDate = new Date(diff);
-    const calculatedAge = Math.abs(ageDate.getUTCFullYear() - 1970);
+  const edad = s.fecha_nacimiento ? (() => {
+    const birth = new Date(s.fecha_nacimiento + 'T00:00:00');
+    const now = new Date();
+    let calculatedAge = now.getFullYear() - birth.getFullYear();
+    const m = now.getMonth() - birth.getMonth();
+    if (m < 0 || (m === 0 && now.getDate() < birth.getDate())) calculatedAge -= 1;
     return !isNaN(calculatedAge) && calculatedAge > 0 ? `${calculatedAge} años` : null;
   })() : null;
 
@@ -265,7 +257,6 @@ export function StudentDetail({ student, onClose }) {
   return createPortal(
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
       <div className="w-full max-w-4xl lg:max-w-5xl overflow-hidden flex flex-col max-h-[92vh] bg-white shadow-2xl rounded-2xl sm:rounded-3xl border-2 border-slate-200">
-        {error && <div className="px-5 py-2 text-sm text-rose-700 bg-rose-50 border-b border-rose-200">{error}</div>}
 
         {/* Cabecera Hero con tech-bg degradado */}
         <div className="relative overflow-hidden border-b border-slate-200 bg-gradient-to-r from-primary-dark via-primary to-secondary shrink-0">
@@ -591,7 +582,7 @@ export function StudentDetail({ student, onClose }) {
                           {matriculas.map(m => (
                             <tr key={m.id} className="hover:bg-primary/5 transition-colors">
                               <td className="py-3 px-4 font-extrabold text-slate-900">Periodo {m.periodo_id}</td>
-                              <td className="py-3 px-4 text-slate-700 font-semibold">{m.programa_id ? getProgramaLabel(m.programa_id) : 'Sin carrera'}</td>
+                              <td className="py-3 px-4 text-slate-700 font-semibold">{PROGRAMAS[m.programa_id] || `Programa ${m.programa_id}`}</td>
                               <td className="py-3 px-4 text-slate-600 font-bold">{m.tipo_ingreso}</td>
                               <td className="py-3 px-4 text-center">
                                 <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-black uppercase ${

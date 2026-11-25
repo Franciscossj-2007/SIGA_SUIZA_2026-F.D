@@ -1,16 +1,20 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { UserCog, Users } from 'lucide-react';
 import { apiClient } from '../../core/api/client';
 import { SectionInfoBlock } from './SectionInfoBlock';
+import { usePrograms } from '../../core/api/usePrograms';
+import { registrarPlanDeCarrera } from '../../core/api/planes';
+import { useAuth } from '../../core/auth/useAuth';
+import { filtrarEstudiantes } from '../../core/studentSearch';
 
 const TIPOS = [
-  { id: 'Ingresante', tone: 'bg-sky-100 text-sky-700 border-sky-200', icon: '🆕' },
-  { id: 'Invicto', tone: 'bg-green-100 text-green-700 border-green-200', icon: '✅' },
-  { id: 'Jalado', tone: 'bg-amber-100 text-amber-700 border-amber-200', icon: '🟥' },
-  { id: 'Historico', tone: 'bg-purple-100 text-purple-700 border-purple-200', icon: '📜' },
+  { id: 'Ingresante', tone: 'bg-sky-100 text-sky-700 border-sky-200', icon: 'ðŸ†•' },
+  { id: 'Invicto', tone: 'bg-green-100 text-green-700 border-green-200', icon: 'âœ…' },
+  { id: 'Jalado', tone: 'bg-amber-100 text-amber-700 border-amber-200', icon: 'ðŸŸ¥' },
+  { id: 'Historico', tone: 'bg-purple-100 text-purple-700 border-purple-200', icon: 'ðŸ“œ' },
 ];
 
-/** Sección 2 del diagrama — Tipos de alumnos históricos. */
+/** SecciÃ³n 2 del diagrama â€” Tipos de alumnos histÃ³ricos. */
 export function TiposAlumnosPanel() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -34,32 +38,52 @@ export function TiposAlumnosPanel() {
   };
 
   useEffect(() => {
-    queueMicrotask(() => {
-      cargar();
-    });
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data load
+    cargar();
   }, []);
 
   const estudiantes = data?.estudiantes || [];
   const resumen = data?.resumen || {};
   const total = resumen.total || 0;
 
-  const programas = [...new Set(estudiantes.map((e) => e.programa_id).filter(Boolean))]
-    .sort((a, b) => a - b);
+  // Carreras que tienen alumnos, con su nombre real (no "Programa 3").
+  const [recargarCatalogo, setRecargarCatalogo] = useState(0);
+  const catalogo = usePrograms(recargarCatalogo);
+  const { user } = useAuth();
+  const rolesUsuario = (user?.roles || []).map((r) => (typeof r === 'string' ? r : r?.name));
+  const puedeRegistrarPlan = user?.is_superuser || rolesUsuario.some((r) => ['superadmin', 'admin', 'director', 'secretaria_academica'].includes(r));
+  const [registrandoPlan, setRegistrandoPlan] = useState(false);
+  const [avisoPlan, setAvisoPlan] = useState('');
 
-  const filtrados = estudiantes.filter((e) => {
-    if (tipoFiltro && e.tipo_alumno !== tipoFiltro) return false;
-    if (programaFiltro && String(e.programa_id) !== String(programaFiltro)) return false;
-    if (search.trim().length >= 2) {
-      const q = search.trim().toLowerCase();
-      return (
-        (e.dni || '').includes(q) ||
-        (e.nombres || '').toLowerCase().includes(q) ||
-        (e.apellidos || '').toLowerCase().includes(q) ||
-        (e.codigo_estudiante || '').toLowerCase().includes(q)
-      );
+  // El aviso aplica a la carrera elegida (cada carrera tiene su propio plan vigente)
+  const carreraElegida = programaFiltro ? catalogo.find((p) => String(p.id) === String(programaFiltro)) : null;
+  const carreraSinPlan = carreraElegida && !carreraElegida.plan_estudio_id ? carreraElegida : null;
+  const carrerasSinPlan = catalogo.filter((p) => !p.plan_estudio_id);
+
+  const registrarPlan = async (carrera) => {
+    setRegistrandoPlan(true);
+    setAvisoPlan('');
+    try {
+      await registrarPlanDeCarrera(carrera);
+      setRecargarCatalogo((n) => n + 1);
+      await cargar();
+      setAvisoPlan(`Plan de estudios registrado y vinculado a ${carrera.nombre}.`);
+    } catch (e) {
+      setAvisoPlan(`No se pudo registrar el plan: ${e.message}`);
+    } finally {
+      setRegistrandoPlan(false);
     }
-    return true;
-  });
+  };
+  const nombreCarrera = (id) => catalogo.find((p) => String(p.id) === String(id))?.nombre || `Programa ${id}`;
+  const programas = [...new Set(estudiantes.map((e) => e.programa_id).filter(Boolean))]
+    .map((id) => ({ id, nombre: nombreCarrera(id) }))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+
+  const filtrados = filtrarEstudiantes(
+    estudiantes.filter((e) => !tipoFiltro || e.tipo_alumno === tipoFiltro),
+    search,
+    programaFiltro
+  );
 
   const toneDe = (tipo) => TIPOS.find((t) => t.id === tipo)?.tone || 'bg-slate-100 text-slate-600 border-slate-200';
 
@@ -72,11 +96,11 @@ export function TiposAlumnosPanel() {
         title="2. Tipos de alumnos"
         description={
           <>
-            Clasifica a los estudiantes según su condición de ingreso y permanencia dentro del proceso
-            de matrícula académica: <b>Ingresante</b>, <b>Invicto</b>, <b>Jalado</b> e <b>Histórico</b>.
+            Clasifica a los estudiantes segÃºn su condiciÃ³n de ingreso y permanencia dentro del proceso
+            de matrÃ­cula acadÃ©mica: <b>Ingresante</b>, <b>Invicto</b>, <b>Jalado</b> e <b>HistÃ³rico</b>.
           </>
         }
-        chips={['Ingresante', 'Invicto', 'Jalado', 'Histórico']}
+        chips={['Ingresante', 'Invicto', 'Jalado', 'HistÃ³rico']}
       />
 
       {/* Tarjetas de resumen */}
@@ -102,11 +126,11 @@ export function TiposAlumnosPanel() {
 
       {/* Filtros */}
       <div className="glass-card p-3 flex flex-wrap items-center gap-3">
-        <span className="px-2 text-slate-400 text-xl">🔍</span>
+        <span className="px-2 text-slate-400 text-xl">ðŸ”</span>
         <input
           type="text"
           className="flex-1 min-w-[200px] bg-transparent border-none focus:ring-0 py-2 text-slate-700 placeholder-slate-400 outline-none"
-          placeholder="Buscar por DNI, Nombre o Código..."
+          placeholder="Buscar por DNI, Nombre o CÃ³digo..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -117,7 +141,7 @@ export function TiposAlumnosPanel() {
         >
           <option value="">Todos los programas</option>
           {programas.map((p) => (
-            <option key={p} value={p}>Programa {p}</option>
+            <option key={p.id} value={p.id}>{p.nombre}</option>
           ))}
         </select>
         {(tipoFiltro || programaFiltro || search) && (
@@ -132,18 +156,36 @@ export function TiposAlumnosPanel() {
           onClick={cargar}
           className="px-3 py-2 rounded-lg text-xs font-bold text-primary bg-primary/10 hover:bg-primary/20"
         >
-          ⟳ Recargar
+          âŸ³ Recargar
         </button>
       </div>
 
       {error && (
-        <div className="p-3 rounded-xl bg-red-50 text-red-700 border border-red-100 text-sm font-medium">❌ {error}</div>
+        <div className="p-3 rounded-xl bg-red-50 text-red-700 border border-red-100 text-sm font-medium">âŒ {error}</div>
       )}
 
-      {data?.plan_vigente === null && (
-        <div className="p-3 rounded-xl bg-amber-50 text-amber-700 border border-amber-100 text-xs">
-          ℹ️ El programa no tiene un <b>plan de estudios vigente</b> definido, así que la detección de alumnos
-          <b> Histórico</b> está desactivada hasta que se registre uno.
+      {(carreraSinPlan || (!programaFiltro && carrerasSinPlan.length > 0)) && (
+        <div className="p-3 rounded-xl bg-amber-50 text-amber-700 border border-amber-100 text-xs flex flex-wrap items-center gap-3">
+          <span className="flex-1 min-w-[240px]">
+            â„¹ï¸ {carreraSinPlan
+              ? <><b>{carreraSinPlan.nombre}</b> no tiene un <b>plan de estudios vigente</b>, asÃ­ que en esa carrera la detecciÃ³n de alumnos <b>HistÃ³rico</b> estÃ¡ desactivada hasta que se registre uno.</>
+              : <>Sin <b>plan de estudios vigente</b>: <b>{carrerasSinPlan.map((p) => p.nombre).join(', ')}</b>. En esas carreras la detecciÃ³n de alumnos <b>HistÃ³rico</b> estÃ¡ desactivada.</>}
+          </span>
+          {puedeRegistrarPlan && (
+            <button
+              type="button"
+              disabled={registrandoPlan}
+              onClick={() => registrarPlan(carreraSinPlan || carrerasSinPlan[0])}
+              className="px-3 py-1.5 rounded-lg bg-amber-600 text-white font-bold hover:bg-amber-700 disabled:opacity-50"
+            >
+              {registrandoPlan ? 'Registrandoâ€¦' : `Registrar plan de ${(carreraSinPlan || carrerasSinPlan[0]).nombre}`}
+            </button>
+          )}
+        </div>
+      )}
+      {avisoPlan && (
+        <div className={`p-3 rounded-xl text-xs font-medium border ${avisoPlan.startsWith('No se pudo') ? 'bg-red-50 text-red-700 border-red-100' : 'bg-green-50 text-green-700 border-green-100'}`}>
+          {avisoPlan.startsWith('No se pudo') ? 'âŒ' : 'âœ…'} {avisoPlan}
         </div>
       )}
 
@@ -156,7 +198,7 @@ export function TiposAlumnosPanel() {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-slate-200">
-                <th className="py-3 px-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Código</th>
+                <th className="py-3 px-4 text-xs font-bold text-slate-400 uppercase tracking-wider">CÃ³digo</th>
                 <th className="py-3 px-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Estudiante</th>
                 <th className="py-3 px-4 text-xs font-bold text-slate-400 uppercase tracking-wider">DNI</th>
                 <th className="py-3 px-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Tipo</th>
@@ -178,7 +220,7 @@ export function TiposAlumnosPanel() {
               ) : filtrados.length === 0 ? (
                 <tr>
                   <td colSpan="9" className="py-12 text-center">
-                    <div className="text-4xl mb-3 opacity-50">👥</div>
+                    <div className="text-4xl mb-3 opacity-50">ðŸ‘¥</div>
                     <p className="text-slate-500 font-medium">No hay alumnos para este filtro.</p>
                   </td>
                 </tr>
@@ -202,7 +244,7 @@ export function TiposAlumnosPanel() {
                           {e.unidades_a_cargo.length}
                         </span>
                       ) : (
-                        <span className="text-slate-300">—</span>
+                        <span className="text-slate-300">â€”</span>
                       )}
                     </td>
                     <td className="py-3 px-4 text-slate-600">{e.ciclo_actual}</td>
@@ -218,3 +260,4 @@ export function TiposAlumnosPanel() {
 }
 
 export default TiposAlumnosPanel;
+

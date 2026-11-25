@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+﻿import { useState, useEffect, useMemo, useRef } from 'react';
 import { apiClient } from '../../core/api/client';
+import { registrarPlanDeCarrera } from '../../core/api/planes';
 import { useToast } from '../../core/ui/ToastContext';
 import { CurriculumMesh } from './CurriculumMesh';
 import { PeriodManager } from './PeriodManager';
@@ -112,7 +113,7 @@ export function AcademicDashboard() {
   // Form for Parametrization
   const [paramConfig, setParamConfig] = useState({
     periodo_academico: 1,
-    turnos: ['mañana'],
+    turnos: ['ma├▒ana'],
     max_estudiantes: 35,
     coordinador_nombre: ''
   });
@@ -135,36 +136,34 @@ export function AcademicDashboard() {
   };
 
   useEffect(() => {
-    queueMicrotask(() => {
-      fetchData();
-    });
+    fetchData(); // eslint-disable-line react-hooks/set-state-in-effect
   }, []);
 
   // Helper: Categorize program by academic area
   const getAreaByProgram = (nombre) => {
     const n = (nombre || '').toUpperCase();
     if (n.includes('SISTEMA') || n.includes('COMPUTO') || n.includes('SOFTWARE') || n.includes('INFORMACI')) {
-      return { name: 'Tecnologías de la Información', badge: 'bg-indigo-50 text-indigo-700 border-indigo-200' };
+      return { name: 'Tecnolog├¡as de la Informaci├│n', badge: 'bg-indigo-50 text-indigo-700 border-indigo-200' };
     }
     if (n.includes('ENFERMER') || n.includes('SALUD') || n.includes('CLINIC') || n.includes('FARMACIA')) {
       return { name: 'Ciencias de la Salud', badge: 'bg-rose-50 text-rose-700 border-rose-200' };
     }
     if (n.includes('CONTABILIDAD') || n.includes('GESTI') || n.includes('ADMINISTRA') || n.includes('ASISTENCIA')) {
-      return { name: 'Gestión y Negocios', badge: 'bg-blue-50 text-blue-700 border-blue-200' };
+      return { name: 'Gesti├│n y Negocios', badge: 'bg-blue-50 text-blue-700 border-blue-200' };
     }
     if (n.includes('CONSTRUCCI') || n.includes('CIVIL') || n.includes('EDIFICACI') || n.includes('ARQUITECT')) {
-      return { name: 'Ingeniería y Construcción', badge: 'bg-amber-50 text-amber-700 border-amber-200' };
+      return { name: 'Ingenier├¡a y Construcci├│n', badge: 'bg-amber-50 text-amber-700 border-amber-200' };
     }
     if (n.includes('MECATR') || n.includes('AUTOMOTRIZ') || n.includes('ELECTRICIDAD') || n.includes('INDUSTRIAL')) {
-      return { name: 'Electrotecnia y Mecánica', badge: 'bg-cyan-50 text-cyan-700 border-cyan-200' };
+      return { name: 'Electrotecnia y Mec├ínica', badge: 'bg-cyan-50 text-cyan-700 border-cyan-200' };
     }
     if (n.includes('AGRO') || n.includes('FORESTAL') || n.includes('PECUARIA') || n.includes('AMBIENT')) {
       return { name: 'Agropecuaria y Forestal', badge: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
     }
     if (n.includes('TURISMO') || n.includes('HOTEL') || n.includes('GASTRONOM')) {
-      return { name: 'Turismo y Hotelería', badge: 'bg-purple-50 text-purple-700 border-purple-200' };
+      return { name: 'Turismo y Hoteler├¡a', badge: 'bg-purple-50 text-purple-700 border-purple-200' };
     }
-    return { name: 'Formación Técnica General', badge: 'bg-slate-50 text-slate-700 border-slate-200' };
+    return { name: 'Formaci├│n T├®cnica General', badge: 'bg-slate-50 text-slate-700 border-slate-200' };
   };
 
   // Helper: Extract ministerial resolution
@@ -205,7 +204,7 @@ export function AcademicDashboard() {
 
   // Reset page when filter changes
   useEffect(() => {
-    queueMicrotask(() => setCurrentPage(1));
+    setCurrentPage(1); // eslint-disable-line react-hooks/set-state-in-effect
   }, [searchTerm, filterEstado, filterModalidad, filterArea, viewMode]);
 
   // Reset catalog scroll to top when page changes
@@ -241,31 +240,25 @@ export function AcademicDashboard() {
       const nombreTrimmed = newProgram.nombre.trim();
       const codigoTrimmed = newProgram.codigo.trim().toUpperCase();
 
-      if (!nombreTrimmed || !codigoTrimmed) {
-        setCreateError('El nombre y el código del programa son obligatorios.');
-        setSavingProgram(false);
-        return;
-      }
-
-      // Validación preventiva local: verificar si el programa ya existe por código o por nombre
+      // Validaci├│n preventiva local: verificar si el programa ya existe por c├│digo o por nombre
       const normalize = (str) => (str || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
       const existeCodigo = programs.some(p => p.codigo && p.codigo.trim().toUpperCase() === codigoTrimmed);
       const existeNombre = programs.some(p => normalize(p.nombre) === normalize(nombreTrimmed));
 
       if (existeCodigo) {
-        setCreateError(`Ya existe un programa de estudio con el código '${codigoTrimmed}'`);
+        setCreateError(`Ya existe un programa de estudio con el c├│digo '${codigoTrimmed}'`);
         setSavingProgram(false);
         return;
       }
       if (existeNombre) {
-        setCreateError(`El programa de estudio '${nombreTrimmed}' ya existe en el catálogo institucional`);
+        setCreateError(`El programa de estudio '${nombreTrimmed}' ya existe en el cat├ílogo institucional`);
         setSavingProgram(false);
         return;
       }
 
       const fullDescription = newProgram.resolucion 
         ? `${newProgram.resolucion}. ${newProgram.descripcion}` 
-        : newProgram.descripcion || 'Carrera profesional técnica oficial del IESTP Suiza';
+        : newProgram.descripcion || 'Carrera profesional t├®cnica oficial del IESTP Suiza';
 
       const payload = {
         nombre: nombreTrimmed,
@@ -277,7 +270,15 @@ export function AcademicDashboard() {
         estado: newProgram.estado || 'activo'
       };
 
-      await apiClient.callModule('mod-programas-estudio', 'programas', 'POST', payload);
+      const creada = await apiClient.callModule('mod-programas-estudio', 'programas', 'POST', payload);
+
+      // Registrar y vincular su plan de estudios (las importadas desde MINEDU ya lo traen).
+      // No bloquea: si falla, la carrera queda creada y el plan se puede registrar despu├®s.
+      try {
+        if (creada?.id) await registrarPlanDeCarrera(creada);
+      } catch (errPlan) {
+        console.warn('No se pudo registrar el plan de la carrera nueva:', errPlan);
+      }
 
       setShowCreateModal(false);
       setCreateError('');
@@ -309,7 +310,7 @@ export function AcademicDashboard() {
     try {
       await apiClient.request(`/api/mod-programas-estudio/programas/${editingProgram.id}`, {
         method: 'PUT',
-        body: JSON.stringify({
+        data: {
           nombre: editingProgram.nombre,
           codigo: editingProgram.codigo,
           descripcion: editingProgram.descripcion || '',
@@ -317,14 +318,14 @@ export function AcademicDashboard() {
           duracion_periodos: parseInt(editingProgram.duracion_periodos) || 6,
           modalidad: editingProgram.modalidad || 'presencial',
           estado: editingProgram.estado || 'activo'
-        })
+        }
       });
       setEditingProgram(null);
       await fetchData();
-      toast.success('Configuración de la carrera actualizada exitosamente');
+      toast.success('Configuraci├│n de la carrera actualizada exitosamente');
     } catch (error) {
       console.error('Error saving program:', error);
-      toast.error(error.message || 'Error al guardar la configuración de la carrera');
+      toast.error(error.message || 'Error al guardar la configuraci├│n de la carrera');
     } finally {
       setSavingProgram(false);
     }
@@ -358,14 +359,14 @@ export function AcademicDashboard() {
       if (res) {
         setParamConfig({
           periodo_academico: res.periodo_academico || 1,
-          turnos: Array.isArray(res.turnos) ? res.turnos : ['mañana'],
+          turnos: Array.isArray(res.turnos) ? res.turnos : ['ma├▒ana'],
           max_estudiantes: res.max_estudiantes || 35,
           coordinador_nombre: res.coordinador_nombre || ''
         });
       } else {
         setParamConfig({
           periodo_academico: 1,
-          turnos: ['mañana', 'noche'],
+          turnos: ['ma├▒ana', 'noche'],
           max_estudiantes: 35,
           coordinador_nombre: ''
         });
@@ -373,7 +374,7 @@ export function AcademicDashboard() {
     } catch {
       setParamConfig({
         periodo_academico: 1,
-        turnos: ['mañana', 'noche'],
+        turnos: ['ma├▒ana', 'noche'],
         max_estudiantes: 35,
         coordinador_nombre: ''
       });
@@ -388,18 +389,18 @@ export function AcademicDashboard() {
     try {
       await apiClient.request(`/api/mod-programas-estudio/programas/${configProgram.id}/configuracion`, {
         method: 'POST',
-        body: JSON.stringify({
+        data: {
           periodo_academico: parseInt(paramConfig.periodo_academico) || 1,
           turnos: paramConfig.turnos,
           max_estudiantes: parseInt(paramConfig.max_estudiantes) || 35,
           coordinador_id: null
-        })
+        }
       });
-      toast.success('¡Parametrización guardada exitosamente!');
+      toast.success('┬íParametrizaci├│n guardada exitosamente!');
       setConfigProgram(null);
     } catch (error) {
-      console.error('Error guardando configuración:', error);
-      toast.error(error.message || 'Error al guardar la parametrización');
+      console.error('Error guardando configuraci├│n:', error);
+      toast.error(error.message || 'Error al guardar la parametrizaci├│n');
     } finally {
       setSavingConfig(false);
     }
@@ -443,7 +444,7 @@ export function AcademicDashboard() {
       if (response.ok) {
         setPreviewData(result.data);
         setImportError('');
-        toast.info('Estructura del plan extraída correctamente. Verifica los datos antes de importar.');
+        toast.info('Estructura del plan extra├¡da correctamente. Verifica los datos antes de importar.');
       } else {
         const msg = result.detail || 'Error al procesar el archivo Excel. Verifica el formato MINEDU.';
         setImportError(msg);
@@ -451,9 +452,9 @@ export function AcademicDashboard() {
       }
     } catch (error) {
       console.error('Error procesando Excel:', error);
-      const msg = 'Error de conexión al procesar el archivo. Intenta nuevamente.';
+      const msg = 'Error de conexi├│n al procesar el archivo. Intenta nuevamente.';
       setImportError(msg);
-      toast.error(msg, 'Error de Conexión');
+      toast.error(msg, 'Error de Conexi├│n');
     } finally {
       setIsProcessing(false);
     }
@@ -468,63 +469,83 @@ export function AcademicDashboard() {
       const codigoCarrera = (previewData.codigo || '').trim();
       const nombreCarrera = (previewData.nombre || '').trim();
 
-      const modulos = Array.isArray(previewData.modulos) ? previewData.modulos : [];
-      if (!codigoCarrera || !nombreCarrera || modulos.length === 0) {
-        const msg = 'La carrera debe contar con código (CNOF), denominación y módulos válidos.';
+      if (!codigoCarrera || !nombreCarrera) {
+        const msg = 'La carrera debe contar con c├│digo (CNOF) y denominaci├│n v├ílidos.';
         setImportError(msg);
         toast.warning(msg, 'Campos requeridos');
         setIsProcessing(false);
         return;
       }
 
-      const formData = new FormData();
-      formData.append('file', importFile);
-      formData.append('codigo', codigoCarrera);
-      formData.append('nombre', nombreCarrera);
+      // 1. Sincronizar o registrar el Plan de Estudios en mod-planes-estudio
+      let planId = null;
+      try {
+        const formData = new FormData();
+        formData.append('file', importFile);
+        formData.append('codigo', codigoCarrera);
+        formData.append('nombre', nombreCarrera);
 
-      const token = localStorage.getItem('token');
-      const planRes = await fetch(`${apiClient.baseURL}/api/mod-planes-estudio/planes/importar-minedu`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-        body: formData
-      });
-      const planData = await planRes.json().catch(() => ({}));
-      if (!planRes.ok) {
-        throw new Error(planData.detail || 'No se pudo importar el plan de estudios.');
+        const token = localStorage.getItem('token');
+        const planRes = await fetch(`${apiClient.baseURL}/api/mod-planes-estudio/planes/importar-minedu`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+          body: formData
+        });
+        
+        if (planRes.ok) {
+          const planData = await planRes.json();
+          planId = planData.plan_id || null;
+        } else {
+          const planErr = await planRes.json().catch(() => ({}));
+          console.warn('Advertencia secundaria en mod-planes-estudio:', planErr.detail);
+        }
+      } catch (errPlanes) {
+        console.warn('Error no bloqueante en mod-planes-estudio:', errPlanes);
       }
-      const planId = planData.plan_id || null;
 
-      const programaPlan = {
+      // 2. Registrar el programa acad├®mico en mod-programas-estudio
+      const programaData = {
         nombre: nombreCarrera,
         codigo: codigoCarrera,
         descripcion: previewData.descripcion || 'Carrera importada desde Plan MINEDU',
         creditos_totales: parseInt(previewData.creditos_totales) || 0,
         duracion_periodos: 6,
-        plan_estudio_id: planId,
-        modulos: modulos.map((modData, i) => ({
-          nombre: modData.nombre,
-          periodo: modData.orden || i + 1,
-          horas_totales: modData.horas || 0,
-          creditos: modData.creditos || 0,
-          orden: modData.orden || i + 1,
-          unidades: Array.isArray(modData.unidades) ? modData.unidades.map((udData, j) => ({
-            nombre: udData.nombre,
-            horas_teoria: udData.horas || 0,
-            horas_practica: 0,
-            creditos: udData.creditos || 0,
-            orden: j + 1
-          })) : []
-        }))
+        plan_estudio_id: planId
       };
+      
+      const createdProgram = await apiClient.callModule('mod-programas-estudio', 'programas', 'POST', programaData);
 
-      const programa = await apiClient.callModule(
-        'mod-programas-estudio',
-        'programas/sincronizar-plan',
-        'POST',
-        programaPlan
-      );
+      // 3. Registrar m├│dulos y unidades did├ícticas en mod-programas-estudio
+      if (createdProgram && createdProgram.id && Array.isArray(previewData.modulos)) {
+        for (let i = 0; i < previewData.modulos.length; i++) {
+          const modData = previewData.modulos[i];
+          const moduloToCreate = {
+            nombre: modData.nombre,
+            periodo: modData.orden || i + 1,
+            horas_totales: modData.horas || 0,
+            creditos: modData.creditos || 0,
+            orden: modData.orden || i + 1
+          };
+          
+          const createdModulo = await apiClient.callModule('mod-programas-estudio', `programas/${createdProgram.id}/modulos`, 'POST', moduloToCreate);
+          
+          if (createdModulo && createdModulo.id && Array.isArray(modData.unidades)) {
+            for (let j = 0; j < modData.unidades.length; j++) {
+              const udData = modData.unidades[j];
+              const unidadToCreate = {
+                nombre: udData.nombre,
+                horas_teoria: udData.horas || 0,
+                horas_practica: 0,
+                creditos: udData.creditos || 0,
+                orden: j + 1
+              };
+              await apiClient.callModule('mod-programas-estudio', `modulos/${createdModulo.id}/unidades`, 'POST', unidadToCreate);
+            }
+          }
+        }
+      }
 
-      toast.success(`El plan de "${nombreCarrera}" (${codigoCarrera}) y su malla fueron ${programa?.creado ? 'creados' : 'actualizados'} exitosamente.`);
+      toast.success(`La carrera "${nombreCarrera}" (${codigoCarrera}) y su estructura curricular fueron creadas exitosamente.`);
       setShowImportModal(false);
       setImportFile(null);
       setPreviewData(null);
@@ -532,10 +553,10 @@ export function AcademicDashboard() {
       await fetchData();
 
     } catch (error) {
-      console.error('Error en importación de carrera:', error);
-      const msg = error.message || 'Error al crear la carrera. Verifique que el código o nombre no existan previamente.';
+      console.error('Error en importaci├│n de carrera:', error);
+      const msg = error.message || 'Error al crear la carrera. Verifique que el c├│digo o nombre no existan previamente.';
       setImportError(msg);
-      toast.error(msg);
+      toast.error(msg, 'Error en Importaci├│n');
     } finally {
       setIsProcessing(false);
     }
@@ -564,7 +585,7 @@ export function AcademicDashboard() {
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400"></span>
               </span>
-              <span className="tracking-wide">IESTP SUIZA · GESTIÓN ACADÉMICA CENTRAL</span>
+              <span className="tracking-wide">IESTP SUIZA ┬À GESTI├ôN ACAD├ëMICA CENTRAL</span>
               <span className="text-white/40">|</span>
               <span className="text-emerald-300 font-bold">MALLAS 2026 VIGENTES</span>
             </div>
@@ -574,7 +595,7 @@ export function AcademicDashboard() {
               <Sparkles className="w-6 h-6 text-amber-300 animate-pulse hidden sm:inline-block" />
             </h1>
             <p className="text-blue-100/80 text-sm sm:text-base max-w-2xl mt-2 leading-relaxed">
-              Catálogo oficial de carreras profesionales técnicas, planes formativos modulares y periodos lectivos acreditados bajo lineamientos del MINEDU.
+              Cat├ílogo oficial de carreras profesionales t├®cnicas, planes formativos modulares y periodos lectivos acreditados bajo lineamientos del MINEDU.
             </p>
           </div>
 
@@ -617,11 +638,11 @@ export function AcademicDashboard() {
               Carreras Profesionales
             </div>
             <p className="text-[11px] text-blue-200/60 mt-0.5">
-              Programas técnicos acreditados
+              Programas t├®cnicos acreditados
             </p>
           </div>
 
-          {/* Card 2: Créditos Formativos */}
+          {/* Card 2: Cr├®ditos Formativos */}
           <div className="group bg-white/10 hover:bg-white/15 backdrop-blur-md rounded-2xl p-4 border border-white/15 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-amber-900/20">
             <div className="flex items-center justify-between mb-3">
               <span className="w-10 h-10 rounded-xl bg-amber-500/25 border border-amber-400/30 flex items-center justify-center text-amber-300 group-hover:scale-110 transition-transform">
@@ -635,10 +656,10 @@ export function AcademicDashboard() {
               126 - 128
             </div>
             <div className="text-xs font-semibold text-blue-200 mt-1">
-              Créditos Académicos
+              Cr├®ditos Acad├®micos
             </div>
             <p className="text-[11px] text-blue-200/60 mt-0.5">
-              6 Semestres · 3 Módulos formativos
+              6 Semestres ┬À 3 M├│dulos formativos
             </p>
           </div>
 
@@ -656,10 +677,10 @@ export function AcademicDashboard() {
               {periods.find(p => p.estado?.toLowerCase() === 'activo' || p.estado?.toLowerCase() === 'en_curso')?.codigo || '2026-I'}
             </div>
             <div className="text-xs font-semibold text-blue-200 mt-1">
-              Semestre Académico Vigente
+              Semestre Acad├®mico Vigente
             </div>
             <p className="text-[11px] text-blue-200/60 mt-0.5">
-              Matrículas y carga lectiva activa
+              Matr├¡culas y carga lectiva activa
             </p>
           </div>
 
@@ -674,10 +695,10 @@ export function AcademicDashboard() {
               </span>
             </div>
             <div className="text-3xl font-extrabold text-white tracking-tight">
-              3 Módulos
+              3 M├│dulos
             </div>
             <div className="text-xs font-semibold text-blue-200 mt-1">
-              Certificación Modular
+              Certificaci├│n Modular
             </div>
             <p className="text-[11px] text-blue-200/60 mt-0.5">
               Salidas laborales intermedias
@@ -759,7 +780,7 @@ export function AcademicDashboard() {
                 <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                 <input
                   type="text"
-                  placeholder="Buscar carrera por nombre, código ministerial o resolución..."
+                  placeholder="Buscar carrera por nombre, c├│digo ministerial o resoluci├│n..."
                   className="w-full pl-9 pr-8 py-2 bg-slate-50/70 hover:bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
                   value={searchTerm}
                   onChange={e => setSearchTerm(e.target.value)}
@@ -787,7 +808,7 @@ export function AcademicDashboard() {
                   title="Vista en Tarjetas"
                 >
                   <LayoutGrid size={15} />
-                  <span className="hidden md:inline">Cuadrícula</span>
+                  <span className="hidden md:inline">Cuadr├¡cula</span>
                 </button>
                 <button
                   type="button"
@@ -820,7 +841,7 @@ export function AcademicDashboard() {
               >
                 <option value="todos">Todos los Estados</option>
                 <option value="activo">Activo</option>
-                <option value="en_liquidacion">En Liquidación</option>
+                <option value="en_liquidacion">En Liquidaci├│n</option>
                 <option value="inactivo">Inactivo</option>
               </select>
 
@@ -836,20 +857,20 @@ export function AcademicDashboard() {
                 <option value="a_distancia">A Distancia</option>
               </select>
 
-              {/* Área / Departamento */}
+              {/* ├ürea / Departamento */}
               <select
                 value={filterArea}
                 onChange={e => setFilterArea(e.target.value)}
                 className="px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-xs font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer transition-colors"
               >
-                <option value="todas">Todas las Áreas Académicas</option>
-                <option value="Tecnologías de la Información">Tecnologías de la Información</option>
+                <option value="todas">Todas las ├üreas Acad├®micas</option>
+                <option value="Tecnolog├¡as de la Informaci├│n">Tecnolog├¡as de la Informaci├│n</option>
                 <option value="Ciencias de la Salud">Ciencias de la Salud</option>
-                <option value="Gestión y Negocios">Gestión y Negocios</option>
-                <option value="Ingeniería y Construcción">Ingeniería y Construcción</option>
-                <option value="Electrotecnia y Mecánica">Electrotecnia y Mecánica</option>
+                <option value="Gesti├│n y Negocios">Gesti├│n y Negocios</option>
+                <option value="Ingenier├¡a y Construcci├│n">Ingenier├¡a y Construcci├│n</option>
+                <option value="Electrotecnia y Mec├ínica">Electrotecnia y Mec├ínica</option>
                 <option value="Agropecuaria y Forestal">Agropecuaria y Forestal</option>
-                <option value="Turismo y Hotelería">Turismo y Hotelería</option>
+                <option value="Turismo y Hoteler├¡a">Turismo y Hoteler├¡a</option>
               </select>
 
               {/* Limpiar Filtros */}
@@ -867,7 +888,7 @@ export function AcademicDashboard() {
 
               {/* Contador */}
               <div className="ml-auto text-slate-400 font-semibold text-[11px]">
-                {filteredPrograms.length} {filteredPrograms.length === 1 ? 'carrera' : 'carreras'} en catálogo
+                {filteredPrograms.length} {filteredPrograms.length === 1 ? 'carrera' : 'carreras'} en cat├ílogo
               </div>
             </div>
           </div>
@@ -876,7 +897,7 @@ export function AcademicDashboard() {
           {loading ? (
             <div className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
               <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mb-3"></div>
-              <p className="text-slate-500 text-sm font-medium">Cargando programas académicos...</p>
+              <p className="text-slate-500 text-sm font-medium">Cargando programas acad├®micos...</p>
             </div>
           ) : filteredPrograms.length === 0 ? (
             <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-12 flex flex-col items-center justify-center text-center">
@@ -888,8 +909,8 @@ export function AcademicDashboard() {
               </h5>
               <p className="text-slate-500 text-xs max-w-sm mb-5">
                 {hasActiveFilters 
-                  ? 'Intenta restablecer los términos de búsqueda o cambiar los filtros seleccionados.' 
-                  : 'Crea tu primer programa de estudio o impórtalo desde el formato oficial MINEDU.'}
+                  ? 'Intenta restablecer los t├®rminos de b├║squeda o cambiar los filtros seleccionados.' 
+                  : 'Crea tu primer programa de estudio o imp├│rtalo desde el formato oficial MINEDU.'}
               </p>
               {hasActiveFilters ? (
                 <button
@@ -951,7 +972,7 @@ export function AcademicDashboard() {
                             {isLiquidacion && (
                               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/80">
                                 <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-                                En Liquidación
+                                En Liquidaci├│n
                               </span>
                             )}
                             {!isActivo && !isLiquidacion && (
@@ -974,7 +995,7 @@ export function AcademicDashboard() {
                               {program.creditos_totales}
                             </div>
                             <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">
-                              Créditos
+                              Cr├®ditos
                             </span>
                           </div>
                         </div>
@@ -986,7 +1007,7 @@ export function AcademicDashboard() {
                             <span className="font-mono text-slate-700">{resolucion}</span>
                           </div>
                           <p className="text-xs text-slate-500 leading-relaxed line-clamp-2">
-                            {program.descripcion || 'Programa modular de formación profesional técnica adaptado a lineamientos MINEDU.'}
+                            {program.descripcion || 'Programa modular de formaci├│n profesional t├®cnica adaptado a lineamientos MINEDU.'}
                           </p>
                         </div>
 
@@ -994,7 +1015,7 @@ export function AcademicDashboard() {
                         <div className="grid grid-cols-2 gap-2 mb-4">
                           <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100/90">
                             <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1 mb-0.5">
-                              <Clock size={11} /> Duración
+                              <Clock size={11} /> Duraci├│n
                             </span>
                             <span className="font-semibold text-xs text-slate-800">
                               {program.duracion_periodos} Ciclos Lectivos
@@ -1020,7 +1041,7 @@ export function AcademicDashboard() {
                               setSelectedProgram(program.id);
                               setView('mesh');
                             }}
-                            title="Explorar Malla Curricular y Unidades Didácticas"
+                            title="Explorar Malla Curricular y Unidades Did├ícticas"
                           >
                             <span>Ver Malla</span>
                             <ArrowRight size={13} />
@@ -1029,16 +1050,16 @@ export function AcademicDashboard() {
                           <button 
                             className="py-2.5 px-3 bg-slate-50 hover:bg-slate-100 text-slate-700 font-medium rounded-xl border border-slate-200/90 text-xs transition-all flex items-center justify-center gap-1.5 shadow-2xs hover:shadow-xs cursor-pointer"
                             onClick={() => handleOpenConfigModal(program)}
-                            title="Configurar turnos, cupos y coordinación"
+                            title="Configurar turnos, cupos y coordinaci├│n"
                           >
                             <Sliders size={13} className="text-slate-500 shrink-0" />
-                            <span>Parametrización</span>
+                            <span>Parametrizaci├│n</span>
                           </button>
 
                           <button 
                             className="py-2.5 px-3 bg-slate-50 hover:bg-slate-100 text-slate-700 font-medium rounded-xl border border-slate-200/90 text-xs transition-all flex items-center justify-center gap-1.5 shadow-2xs hover:shadow-xs cursor-pointer"
                             onClick={() => setEditingProgram({ ...program })}
-                            title="Editar información de la carrera"
+                            title="Editar informaci├│n de la carrera"
                           >
                             <Edit3 size={13} className="text-slate-500 shrink-0" />
                             <span>Editar</span>
@@ -1066,11 +1087,11 @@ export function AcademicDashboard() {
                 <table className="w-full min-w-[900px] text-left text-xs text-slate-600">
                   <thead className="bg-slate-50/80 border-b border-slate-200/80 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
                     <tr>
-                      <th className="py-3.5 px-4">Código</th>
+                      <th className="py-3.5 px-4">C├│digo</th>
                       <th className="py-3.5 px-4">Programa de Estudio</th>
-                      <th className="py-3.5 px-4">Área / Depto</th>
-                      <th className="py-3.5 px-4 text-center">Créditos</th>
-                      <th className="py-3.5 px-4">Duración</th>
+                      <th className="py-3.5 px-4">├ürea / Depto</th>
+                      <th className="py-3.5 px-4 text-center">Cr├®ditos</th>
+                      <th className="py-3.5 px-4">Duraci├│n</th>
                       <th className="py-3.5 px-4">Modalidad</th>
                       <th className="py-3.5 px-4">Estado</th>
                       <th className="py-3.5 px-4 text-right">Acciones</th>
@@ -1121,7 +1142,7 @@ export function AcademicDashboard() {
                             {isLiquidacion && (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
                                 <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-                                En Liquidación
+                                En Liquidaci├│n
                               </span>
                             )}
                             {!isActivo && !isLiquidacion && (
@@ -1145,7 +1166,7 @@ export function AcademicDashboard() {
                               <button
                                 onClick={() => handleOpenConfigModal(program)}
                                 className="p-1.5 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
-                                title="Configurar Parametrización"
+                                title="Configurar Parametrizaci├│n"
                               >
                                 <Sliders size={14} />
                               </button>
@@ -1178,7 +1199,7 @@ export function AcademicDashboard() {
           {totalPages > 1 && (
             <div className="flex items-center justify-between bg-white px-5 py-3 rounded-2xl border border-slate-200/80 shadow-sm text-xs">
               <span className="text-slate-500 font-medium">
-                Página <span className="font-bold text-slate-800">{currentPage}</span> de <span className="font-bold text-slate-800">{totalPages}</span> ({filteredPrograms.length} carreras)
+                P├ígina <span className="font-bold text-slate-800">{currentPage}</span> de <span className="font-bold text-slate-800">{totalPages}</span> ({filteredPrograms.length} carreras)
               </span>
 
               <div className="flex items-center gap-1.5">
@@ -1186,7 +1207,7 @@ export function AcademicDashboard() {
                   onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
                   disabled={currentPage === 1}
                   className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                  aria-label="Página anterior"
+                  aria-label="P├ígina anterior"
                 >
                   <ChevronLeft size={16} />
                 </button>
@@ -1209,7 +1230,7 @@ export function AcademicDashboard() {
                   onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
                   disabled={currentPage === totalPages}
                   className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                  aria-label="Página siguiente"
+                  aria-label="P├ígina siguiente"
                 >
                   <ChevronRight size={16} />
                 </button>
@@ -1230,7 +1251,7 @@ export function AcademicDashboard() {
                 </div>
                 <div>
                   <h5 className="font-bold text-base text-slate-900 tracking-tight">Crear Nuevo Programa de Estudio</h5>
-                  <p className="text-xs text-slate-400">Registra una nueva carrera profesional técnica en el catálogo del instituto</p>
+                  <p className="text-xs text-slate-400">Registra una nueva carrera profesional t├®cnica en el cat├ílogo del instituto</p>
                 </div>
               </div>
               <button
@@ -1271,7 +1292,7 @@ export function AcademicDashboard() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                    Código Modular / MINEDU <span className="text-rose-500">*</span>
+                    C├│digo Modular / MINEDU <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="text"
@@ -1289,7 +1310,7 @@ export function AcademicDashboard() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                    Resolución Ministerial
+                    Resoluci├│n Ministerial
                   </label>
                   <input
                     type="text"
@@ -1304,7 +1325,7 @@ export function AcademicDashboard() {
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                    Créditos <span className="text-rose-500">*</span>
+                    Cr├®ditos <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="number"
@@ -1354,7 +1375,7 @@ export function AcademicDashboard() {
                     onChange={e => setNewProgram({ ...newProgram, estado: e.target.value })}
                   >
                     <option value="activo">Activo</option>
-                    <option value="en_liquidacion">En Liquidación</option>
+                    <option value="en_liquidacion">En Liquidaci├│n</option>
                     <option value="inactivo">Inactivo</option>
                   </select>
                 </div>
@@ -1362,11 +1383,11 @@ export function AcademicDashboard() {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                  Descripción Institucional del Programa
+                  Descripci├│n Institucional del Programa
                 </label>
                 <textarea
                   rows="3"
-                  placeholder="Perfil de egreso, competencias específicas y ámbito de desempeño profesional..."
+                  placeholder="Perfil de egreso, competencias espec├¡ficas y ├ímbito de desempe├▒o profesional..."
                   className="w-full px-3.5 py-2.5 bg-slate-50/50 border border-slate-200 rounded-xl text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
                   value={newProgram.descripcion}
                   onChange={e => setNewProgram({ ...newProgram, descripcion: e.target.value })}
@@ -1405,17 +1426,17 @@ export function AcademicDashboard() {
         </div>
       )}
 
-      {/* ================= MODAL: CONFIGURAR PARAMETRIZACIÓN ================= */}
+      {/* ================= MODAL: CONFIGURAR PARAMETRIZACI├ôN ================= */}
       {configProgram && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xl w-full max-w-lg overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center px-6 py-4 border-b border-slate-100">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
                   <Sliders size={17} />
                 </div>
                 <div>
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Parametrización Operativa</span>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Parametrizaci├│n Operativa</span>
                   <h5 className="font-bold text-base text-slate-900 leading-tight">{configProgram.nombre}</h5>
                 </div>
               </div>
@@ -1430,7 +1451,7 @@ export function AcademicDashboard() {
             <form onSubmit={handleSaveConfig} className="p-6 space-y-4">
               <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/70 text-xs flex justify-between items-center">
                 <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-bold">Código Modular</span>
+                  <span className="text-slate-400 block text-[10px] uppercase font-bold">C├│digo Modular</span>
                   <span className="font-mono font-bold text-slate-800">{configProgram.codigo}</span>
                 </div>
                 <div className="text-right">
@@ -1442,10 +1463,10 @@ export function AcademicDashboard() {
               {/* Turnos Habilitados */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
-                  Turnos Habilitados para Matrícula y Dictado
+                  Turnos Habilitados para Matr├¡cula y Dictado
                 </label>
                 <div className="grid grid-cols-3 gap-2.5">
-                  {['mañana', 'tarde', 'noche'].map(t => {
+                  {['ma├▒ana', 'tarde', 'noche'].map(t => {
                     const isSelected = paramConfig.turnos.includes(t);
                     return (
                       <button
@@ -1464,14 +1485,14 @@ export function AcademicDashboard() {
                     );
                   })}
                 </div>
-                <p className="text-[11px] text-slate-400 mt-1">Selecciona al menos un turno vigente para la programación horaria.</p>
+                <p className="text-[11px] text-slate-400 mt-1">Selecciona al menos un turno vigente para la programaci├│n horaria.</p>
               </div>
 
-              {/* Aforo / Cupo Máximo */}
+              {/* Aforo / Cupo M├íximo */}
               <div className="grid grid-cols-2 gap-3.5">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                    Aforo Máximo por Sección
+                    Aforo M├íximo por Secci├│n
                   </label>
                   <input
                     type="number"
@@ -1482,7 +1503,7 @@ export function AcademicDashboard() {
                     onChange={e => setParamConfig({ ...paramConfig, max_estudiantes: e.target.value })}
                     required
                   />
-                  <span className="text-[10px] text-slate-400 mt-0.5 block">Estudiantes límite por aula</span>
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">Estudiantes l├¡mite por aula</span>
                 </div>
 
                 <div>
@@ -1517,7 +1538,7 @@ export function AcademicDashboard() {
                   className="flex-1 py-2 px-4 rounded-xl bg-primary hover:bg-primary-dark text-white text-xs font-bold shadow-sm transition-all flex items-center justify-center gap-1.5"
                   disabled={savingConfig}
                 >
-                  {savingConfig ? 'Guardando...' : 'Aplicar Parametrización'}
+                  {savingConfig ? 'Guardando...' : 'Aplicar Parametrizaci├│n'}
                 </button>
               </div>
             </form>
@@ -1525,7 +1546,7 @@ export function AcademicDashboard() {
         </div>
       )}
 
-      {/* ================= MODAL: EDITAR INFORMACIÓN DE CARRERA ================= */}
+      {/* ================= MODAL: EDITAR INFORMACI├ôN DE CARRERA ================= */}
       {editingProgram && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm animate-fade-in">
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
@@ -1556,7 +1577,7 @@ export function AcademicDashboard() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Código Modular</label>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">C├│digo Modular</label>
                   <input
                     type="text"
                     className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-mono uppercase text-slate-800 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
@@ -1566,7 +1587,7 @@ export function AcademicDashboard() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Créditos Totales</label>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Cr├®ditos Totales</label>
                   <input
                     type="number"
                     min="1"
@@ -1580,7 +1601,7 @@ export function AcademicDashboard() {
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Duración (Ciclos)</label>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Duraci├│n (Ciclos)</label>
                   <input
                     type="number"
                     min="1"
@@ -1611,20 +1632,20 @@ export function AcademicDashboard() {
                     onChange={e => setEditingProgram({ ...editingProgram, estado: e.target.value })}
                   >
                     <option value="activo">Activo</option>
-                    <option value="en_liquidacion">En Liquidación</option>
+                    <option value="en_liquidacion">En Liquidaci├│n</option>
                     <option value="inactivo">Inactivo</option>
                   </select>
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Resolución y Descripción</label>
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Resoluci├│n y Descripci├│n</label>
                 <textarea
                   rows="3"
                   className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
                   value={editingProgram.descripcion || ''}
                   onChange={e => setEditingProgram({ ...editingProgram, descripcion: e.target.value })}
-                  placeholder="Resolución ministerial y descripción del perfil formativo..."
+                  placeholder="Resoluci├│n ministerial y descripci├│n del perfil formativo..."
                 />
               </div>
 
@@ -1657,7 +1678,7 @@ export function AcademicDashboard() {
             <div className="flex justify-between items-center px-6 py-4 border-b border-slate-100">
               <div>
                 <h5 className="font-bold text-base text-slate-900 tracking-tight">Importar Plan de Estudio MINEDU</h5>
-                <p className="text-xs text-slate-400">Estructura curricular automática a partir del formato Excel oficial</p>
+                <p className="text-xs text-slate-400">Estructura curricular autom├ítica a partir del formato Excel oficial</p>
               </div>
               <button 
                 onClick={() => { setShowImportModal(false); setImportError(''); }} 
@@ -1732,7 +1753,7 @@ export function AcademicDashboard() {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
                       <div className="md:col-span-2">
                         <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                          Denominación de la Carrera / Programa:
+                          Denominaci├│n de la Carrera / Programa:
                         </label>
                         <input
                           type="text"
@@ -1744,7 +1765,7 @@ export function AcademicDashboard() {
                       </div>
                       <div>
                         <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                          Código Carrera (CNOF):
+                          C├│digo Carrera (CNOF):
                         </label>
                         <input
                           type="text"
@@ -1757,25 +1778,25 @@ export function AcademicDashboard() {
                     </div>
                     {previewData.codigo_modular && (
                       <p className="text-[10px] text-slate-400">
-                        Código Modular Institucional: <span className="font-mono font-medium text-slate-600">{previewData.codigo_modular}</span> (se conserva como referencia y no colisiona entre carreras)
+                        C├│digo Modular Institucional: <span className="font-mono font-medium text-slate-600">{previewData.codigo_modular}</span> (se conserva como referencia y no colisiona entre carreras)
                       </p>
                     )}
                   </div>
 
                   <div>
-                    <h6 className="font-bold text-slate-800 text-xs uppercase tracking-wider mb-2">Módulos Extraídos ({previewData.modulos?.length || 0})</h6>
+                    <h6 className="font-bold text-slate-800 text-xs uppercase tracking-wider mb-2">M├│dulos Extra├¡dos ({previewData.modulos?.length || 0})</h6>
                     <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                       {previewData.modulos.map((mod, idx) => (
                         <div key={idx} className="border border-slate-200/80 rounded-xl overflow-hidden text-xs">
                           <div className="bg-slate-50 p-2.5 flex justify-between items-center font-semibold text-slate-700">
                             <span>{mod.nombre}</span>
-                            <span className="text-slate-500 font-mono text-[11px]">{mod.creditos} CR • {mod.horas} HR</span>
+                            <span className="text-slate-500 font-mono text-[11px]">{mod.creditos} CR ÔÇó {mod.horas} HR</span>
                           </div>
                           {mod.unidades && mod.unidades.length > 0 && (
                             <div className="p-2 bg-white space-y-1">
                               {mod.unidades.map((ud, uIdx) => (
                                 <div key={uIdx} className="flex justify-between items-center text-slate-600 px-2 py-1 hover:bg-slate-50 rounded">
-                                  <span>• {ud.nombre}</span>
+                                  <span>ÔÇó {ud.nombre}</span>
                                   <span className="text-slate-400 font-mono">{ud.creditos} CR</span>
                                 </div>
                               ))}
@@ -1820,7 +1841,7 @@ export function AcademicDashboard() {
         </div>
       )}
 
-      {/* ================= MODAL: GESTIÓN DE PERIODOS (PRESERVADO) ================= */}
+      {/* ================= MODAL: GESTI├ôN DE PERIODOS (PRESERVADO) ================= */}
       {showPeriodManager && (
         <PeriodManager 
           onClose={() => setShowPeriodManager(false)} 
@@ -1828,7 +1849,7 @@ export function AcademicDashboard() {
         />
       )}
 
-      {/* ================= MODAL: CONFIRMAR ELIMINACIÓN DE CARRERA ================= */}
+      {/* ================= MODAL: CONFIRMAR ELIMINACI├ôN DE CARRERA ================= */}
       {programToDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm animate-fade-in">
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xl w-full max-w-md overflow-hidden">
@@ -1838,12 +1859,12 @@ export function AcademicDashboard() {
               </div>
               
               <div>
-                <h4 className="text-lg font-bold text-slate-900 tracking-tight">¿Eliminar Carrera Profesional?</h4>
+                <h4 className="text-lg font-bold text-slate-900 tracking-tight">┬┐Eliminar Carrera Profesional?</h4>
                 <p className="text-xs text-slate-500 mt-2 leading-relaxed">
-                  ¿Está seguro de que desea eliminar la carrera <span className="font-bold text-slate-800">{programToDelete.nombre}</span> (<span className="font-mono font-semibold">{programToDelete.codigo}</span>)?
+                  ┬┐Est├í seguro de que desea eliminar la carrera <span className="font-bold text-slate-800">{programToDelete.nombre}</span> (<span className="font-mono font-semibold">{programToDelete.codigo}</span>)?
                 </p>
                 <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200/80 rounded-lg p-2.5 mt-2.5 text-left">
-                  ⚠️ Esta acción removerá el registro del programa del catálogo institucional. Si tiene estudiantes asociados, el sistema bloqueará la eliminación por seguridad.
+                  ÔÜá´©Å Esta acci├│n remover├í el registro del programa del cat├ílogo institucional. Si tiene estudiantes asociados, el sistema bloquear├í la eliminaci├│n por seguridad.
                 </p>
               </div>
 
@@ -1877,7 +1898,7 @@ export function AcademicDashboard() {
                   ) : (
                     <>
                       <Trash2 size={14} />
-                      <span>Sí, Eliminar</span>
+                      <span>S├¡, Eliminar</span>
                     </>
                   )}
                 </button>

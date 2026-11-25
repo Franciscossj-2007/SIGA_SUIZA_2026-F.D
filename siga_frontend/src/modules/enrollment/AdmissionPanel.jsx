@@ -4,25 +4,7 @@ import {
   Search, CircleCheckBig, AlertTriangle, Info,
 } from 'lucide-react';
 import { apiClient, API_BASE } from '../../core/api/client';
-import { PROGRAMAS, getProgramaLabel } from '../../core/catalog/programas';
 import { SectionInfoBlock } from './SectionInfoBlock';
-import { getDefaultPeriod, getPeriodLabel, getPeriodLabelById, isHistoricalPeriod, isFirstPeriodOfYear } from './periodUtils';
-import './enrollmentPremium.css';
-
-const EXTENSIONES_PERMITIDAS = /\.(xlsx|xls|json)$/i;
-const MAX_ARCHIVO = 25 * 1024 * 1024;
-const PROGRAMAS_ADMISION = PROGRAMAS
-  .filter(programa => programa.id !== 'ALL')
-  .map(programa => ({ id: programa.id, nombre: programa.label }));
-
-const describirError = (detail) => {
-  if (typeof detail === 'string') return detail;
-  if (detail && typeof detail === 'object') {
-    const mensajes = [detail.message, ...(detail.errores || [])].filter(Boolean);
-    if (mensajes.length > 0) return mensajes.join(' ');
-  }
-  return 'Error al procesar el archivo.';
-};
 
 const Badge = ({ children, tone = 'slate' }) => {
   const tones = {
@@ -38,6 +20,10 @@ const Badge = ({ children, tone = 'slate' }) => {
     </span>
   );
 };
+import { getDefaultPeriod, getPeriodLabel, getPeriodLabelById, isHistoricalPeriod, isFirstPeriodOfYear } from './periodUtils';
+import './enrollmentPremium.css';
+import { useAuth } from '../../core/auth/useAuth';
+import { programaInicial } from '../../core/studentSearch';
 
 /**
  * Sección 1 del diagrama — Admisión.
@@ -47,6 +33,8 @@ const Badge = ({ children, tone = 'slate' }) => {
  * al procesar, mostrando el resumen y la ficha de cada ingresante.
  */
 export function AdmissionPanel() {
+  const { user } = useAuth();
+  const [programs, setPrograms] = useState([]);
   const [periods, setPeriods] = useState([]);
   const [programaId, setProgramaId] = useState('');
   const [periodoId, setPeriodoId] = useState('');
@@ -63,15 +51,23 @@ export function AdmissionPanel() {
   useEffect(() => {
     (async () => {
       try {
-        const pe = await apiClient.callModule('mod-programas-estudio', 'periodos').catch(() => []);
+        const [p, pe] = await Promise.all([
+          apiClient.request('/api/mod-programas-estudio/programas').catch(() => []),
+          apiClient.callModule('mod-programas-estudio', 'periodos').catch(() => []),
+        ]);
+        const prog = Array.isArray(p) ? p : [];
         const per = Array.isArray(pe) ? pe : [];
+        setPrograms(prog);
         setPeriods(per);
+        setProgramaId(programaInicial(prog, user));
         const activo = getDefaultPeriod(per);
         if (activo) setPeriodoId(String(activo.id));
       } catch (e) {
-        console.error('No se pudieron cargar periodos:', e);
+        console.error('No se pudieron cargar programas/periodos:', e);
       }
     })();
+    // Carga única al abrir: el panel solo se muestra con la sesión ya iniciada.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const subir = async (dryRun) => {
@@ -116,7 +112,7 @@ export function AdmissionPanel() {
         }
       );
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(describirError(data.detail || `Error ${res.status}`));
+      if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
       if (dryRun) setPreview(data);
       else setResultado(data);
     } catch (e) {
@@ -139,6 +135,8 @@ export function AdmissionPanel() {
       setFichaLoading(null);
     }
   };
+
+  // Badge moved outside component
 
   return (
     <div className="animate-fade-in space-y-6">
@@ -168,7 +166,7 @@ export function AdmissionPanel() {
             onChange={(e) => setProgramaId(e.target.value)}
           >
             <option value="">(Usar el del archivo / sin programa)</option>
-            {PROGRAMAS_ADMISION.map((p) => (
+            {programs.map((p) => (
               <option key={p.id} value={p.id}>{p.nombre}</option>
             ))}
           </select>
@@ -210,28 +208,10 @@ export function AdmissionPanel() {
             type="file"
             accept=".xlsx,.xls,.json"
             onChange={(e) => {
-              const seleccionado = e.target.files?.[0] || null;
-              setFile(null);
+              setFile(e.target.files[0] || null);
               setError('');
               setPreview(null);
               setResultado(null);
-              if (!seleccionado) return;
-              if (!EXTENSIONES_PERMITIDAS.test(seleccionado.name)) {
-                setError('Formato inválido: selecciona un archivo .xlsx, .xls o .json.');
-                e.target.value = '';
-                return;
-              }
-              if (seleccionado.size === 0) {
-                setError('El archivo está vacío.');
-                e.target.value = '';
-                return;
-              }
-              if (seleccionado.size > MAX_ARCHIVO) {
-                setError('El archivo supera el tamaño máximo de 25 MB.');
-                e.target.value = '';
-                return;
-              }
-              setFile(seleccionado);
             }}
             className="sma-file-input"
           />
@@ -286,22 +266,6 @@ export function AdmissionPanel() {
               <Badge tone="amber">Ya existen: {preview.existentes}</Badge>
             </div>
           </div>
-          {preview.advertencia && (
-            <div className="mb-4 p-3 rounded-xl bg-amber-50 text-amber-800 border border-amber-200 text-xs">
-              <AlertTriangle size={14} className="inline mr-2" />
-              {preview.advertencia}
-            </div>
-          )}
-          {preview.errores?.length > 0 && (
-            <details className="mb-4 text-sm">
-              <summary className="cursor-pointer font-semibold text-red-700">
-                Registros omitidos ({preview.errores.length})
-              </summary>
-              <ul className="mt-2 space-y-1 text-red-600 text-xs">
-                {preview.errores.map((mensaje, i) => <li key={i}>{mensaje}</li>)}
-              </ul>
-            </details>
-          )}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -321,9 +285,7 @@ export function AdmissionPanel() {
                     <td className="py-2 pr-4 font-mono text-slate-700">{r.dni}</td>
                     <td className="py-2 pr-4 text-slate-700">{r.nombres}</td>
                     <td className="py-2 pr-4 text-slate-700">{r.apellidos}</td>
-                    <td className="py-2 pr-4 text-slate-500">
-                      {r.programa_id || programaId ? getProgramaLabel(r.programa_id || programaId) : '-'}
-                    </td>
+                    <td className="py-2 pr-4 text-slate-500">{r.programa_id || programaId || '-'}</td>
                     <td className="py-2 pr-4 text-slate-500">{r.celular || '-'}</td>
                     <td className="py-2 pr-4 text-slate-500">{r.email_personal || '-'}</td>
                     <td className="py-2">
@@ -357,16 +319,6 @@ export function AdmissionPanel() {
               </>
             )}
           </div>
-          {resultado.errores?.length > 0 && (
-            <details className="text-sm">
-              <summary className="cursor-pointer font-semibold text-red-700">
-                Registros omitidos ({resultado.errores.length})
-              </summary>
-              <ul className="mt-2 space-y-1 text-red-600 text-xs">
-                {resultado.errores.map((mensaje, i) => <li key={i}>{mensaje}</li>)}
-              </ul>
-            </details>
-          )}
 
           {resultado.matricula?.detalle?.length > 0 && (
             <div className="overflow-x-auto">

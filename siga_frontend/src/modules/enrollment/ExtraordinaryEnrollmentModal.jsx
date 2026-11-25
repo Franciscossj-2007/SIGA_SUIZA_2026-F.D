@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { createPortal } from 'react-dom';
 import { apiClient, API_BASE } from '../../core/api/client';
-import { PROGRAMAS } from '../../core/catalog/programas';
+import { usePrograms } from '../../core/api/usePrograms';
 
 export default function ExtraordinaryEnrollmentModal({ isOpen, onClose, onSuccess, currentPrograma, userRole }) {
+  const programas = usePrograms();
   const [formData, setFormData] = useState({
     dni: '',
     nombres: '',
@@ -18,36 +18,13 @@ export default function ExtraordinaryEnrollmentModal({ isOpen, onClose, onSucces
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError(null);
-
-    const dni = String(formData.dni || '').trim();
-    const nombres = String(formData.nombres || '').trim();
-    const apellidos = String(formData.apellidos || '').trim();
-    const codigo_estudiante = String(formData.codigo_estudiante || '').trim();
-
-    if (!/^\d{8}$/.test(dni)) {
-      setError('El DNI debe tener exactamente 8 dígitos.');
-      return;
-    }
-    if (!nombres || !apellidos || !codigo_estudiante) {
-      setError('Nombres, apellidos y código son campos obligatorios.');
-      return;
-    }
-    if (!formData.programa_id) {
-      setError('Seleccione un programa de estudio.');
-      return;
-    }
-
     setLoading(true);
+    setError(null);
 
     try {
       // 1. Create the student
       const studentPayload = {
         ...formData,
-        dni,
-        nombres,
-        apellidos,
-        codigo_estudiante,
         programa_id: parseInt(formData.programa_id),
         modalidad_admision: 'MIGRACION_HISTORICA',
         estado_academico: 'estudiante'
@@ -80,8 +57,8 @@ export default function ExtraordinaryEnrollmentModal({ isOpen, onClose, onSucces
     }
   };
 
-  return createPortal(
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-start justify-center overflow-y-auto p-4 pt-10 sm:pt-16">
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-slide-up border border-white/20">
         <div className="bg-gradient-to-r from-indigo-600 to-violet-600 px-8 py-6 flex justify-between items-center relative overflow-hidden">
           <div className="absolute -right-6 -top-6 w-24 h-24 bg-white/10 rounded-full blur-xl"></div>
@@ -115,9 +92,7 @@ export default function ExtraordinaryEnrollmentModal({ isOpen, onClose, onSucces
                 <input 
                   type="text" 
                   required 
-                  minLength={8}
                   maxLength={8}
-                  pattern="\d{8}"
                   placeholder="Ej. 76543210"
                   className="w-full pl-10 bg-slate-50 border border-slate-200 rounded-xl py-2.5 text-sm font-medium text-slate-800 placeholder-slate-400 focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none"
                   value={formData.dni}
@@ -178,9 +153,9 @@ export default function ExtraordinaryEnrollmentModal({ isOpen, onClose, onSucces
                 value={formData.programa_id}
                 onChange={e => setFormData({...formData, programa_id: e.target.value})}
               >
-                <option value="">Seleccione una carrera...</option>
-                {PROGRAMAS.filter(p => p.id !== 'ALL').map(p => (
-                  <option key={p.id} value={p.id}>{p.label}</option>
+                <option value="" disabled>Selecciona el programa</option>
+                {programas.map(p => (
+                  <option key={p.id} value={p.id}>{p.nombre}</option>
                 ))}
               </select>
             </div>
@@ -220,7 +195,6 @@ export default function ExtraordinaryEnrollmentModal({ isOpen, onClose, onSucces
           </div>
         </form>
       </div>
-    </div>,
-    document.body,
+    </div>
   );
 }

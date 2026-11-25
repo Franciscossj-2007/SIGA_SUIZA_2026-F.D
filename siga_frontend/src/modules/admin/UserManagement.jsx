@@ -1,12 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { apiClient } from '../../core/api/client';
 import { useToast } from '../../core/ui/ToastContext';
-import { useConfirm } from '../../core/ui/ConfirmModal';
-import { Plus, Pencil, X, UserX, Users, ShieldCheck } from 'lucide-react';
+import { Plus, Pencil, X, UserX, Users, ShieldCheck, Eye, EyeOff } from 'lucide-react';
 
 export function UserManagement() {
   const toast = useToast();
-  const confirm = useConfirm();
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -20,29 +18,42 @@ export function UserManagement() {
     role_ids: []
   });
   const [editingId, setEditingId] = useState(null);
+  const [verClave, setVerClave] = useState(false);
 
-  const loadData = useCallback(async () => {
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true);
+      try {
+        const [usersRes, rolesRes] = await Promise.all([
+          apiClient.request('/api/mod-usuarios/usuarios'),
+          apiClient.request('/api/mod-usuarios/roles')
+        ]);
+        setUsers(usersRes);
+        setRoles(rolesRes);
+      } catch (error) {
+        console.error('Error loading users/roles:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadData();
+  }, []);
+
+  const loadData = async () => {
     setLoading(true);
     try {
       const [usersRes, rolesRes] = await Promise.all([
         apiClient.request('/api/mod-usuarios/usuarios'),
         apiClient.request('/api/mod-usuarios/roles')
       ]);
-      setUsers(Array.isArray(usersRes) ? usersRes : usersRes?.results ?? []);
-      setRoles(Array.isArray(rolesRes) ? rolesRes : rolesRes?.results ?? []);
+      setUsers(usersRes);
+      setRoles(rolesRes);
     } catch (error) {
       console.error('Error loading users/roles:', error);
-      toast.error('No se pudo cargar usuarios y roles.');
     } finally {
       setLoading(false);
     }
-  }, [toast]);
-
-  useEffect(() => {
-    queueMicrotask(() => {
-      loadData();
-    });
-  }, [loadData]);
+  };
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -64,6 +75,7 @@ export function UserManagement() {
   const openNewUserModal = () => {
     setFormData({ email: '', full_name: '', password: '', is_active: true, is_superuser: false, role_ids: [] });
     setEditingId(null);
+    setVerClave(false);
     setShowModal(true);
   };
 
@@ -73,8 +85,8 @@ export function UserManagement() {
       full_name: user.full_name,
       is_active: user.is_active,
       is_superuser: user.is_superuser,
-      role_ids: Array.isArray(user.roles) ? user.roles.map(r => r.id) : [],
-      password: ''
+      role_ids: user.roles.map(r => r.id),
+      password: '' // empty so it won't be updated unless provided (not implemented for update yet)
     });
     setEditingId(user.id);
     setShowModal(true);
@@ -99,7 +111,7 @@ export function UserManagement() {
   };
 
   const handleDelete = async (id) => {
-    const ok = await confirm({
+    const ok = await toast.confirm({
       title: 'Desactivar Usuario',
       message: '¿Estás seguro de desactivar este usuario?',
       type: 'warning',
@@ -157,11 +169,11 @@ export function UserManagement() {
                 <td className="px-6 py-4">
                   <div className="flex items-center">
                     <div className="h-10 w-10 rounded-full bg-gradient-to-br from-primary to-primary-dark flex items-center justify-center text-white font-bold shadow-sm">
-                      {(user.full_name ?? '?').charAt(0).toUpperCase()}
+                      {user.full_name.charAt(0).toUpperCase()}
                     </div>
                     <div className="ml-4">
                       <div className="font-bold text-slate-text flex items-center">
-                        {user.full_name ?? 'Sin nombre'}
+                        {user.full_name}
                         {user.is_superuser && (
                           <span className="ml-2 bg-amber-100 text-amber-700 text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide">
                             Superadmin
@@ -174,12 +186,12 @@ export function UserManagement() {
                 </td>
                 <td className="px-6 py-4">
                   <div className="flex flex-wrap gap-1">
-                    {(user.roles ?? []).map(r => (
+                    {user.roles.map(r => (
                       <span key={r.id} className="bg-primary-soft text-primary border border-primary/20 text-xs font-semibold px-2 py-0.5 rounded-full">
                         {r.name}
                       </span>
                     ))}
-                    {(user.roles ?? []).length === 0 && <span className="text-slate-400 text-sm italic">Sin roles</span>}
+                    {user.roles.length === 0 && <span className="text-slate-400 text-sm italic">Sin roles</span>}
                   </div>
                 </td>
                 <td className="px-6 py-4">
@@ -259,16 +271,28 @@ export function UserManagement() {
                 {!editingId && (
                   <div>
                     <label className="label text-slate-700">Contraseña</label>
-                    <input 
-                      type="password" 
-                      className="input-field" 
-                      name="password" 
-                      value={formData.password} 
-                      onChange={handleInputChange} 
-                      required 
-                      minLength="6" 
-                      placeholder="Mínimo 6 caracteres"
-                    />
+                    <div className="relative">
+                      <input
+                        type={verClave ? 'text' : 'password'}
+                        className="input-field pr-11"
+                        name="password"
+                        value={formData.password}
+                        onChange={handleInputChange}
+                        required
+                        minLength="6"
+                        placeholder="Mínimo 6 caracteres"
+                        autoComplete="new-password"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setVerClave(v => !v)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-primary transition-colors"
+                        aria-label={verClave ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                        title={verClave ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                      >
+                        {verClave ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
                   </div>
                 )}
                 
