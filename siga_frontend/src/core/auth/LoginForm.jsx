@@ -5,8 +5,8 @@ import { GraduationCap, Users, ClipboardList, MonitorSmartphone, Mail, Lock, Eye
 export function LoginForm() {
   const { login } = useAuth();
   const [form, setForm] = useState({
-    email: 'admin@siga.edu',
-    password: 'admin123',
+    email: '',
+    password: '',
   });
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -17,7 +17,7 @@ export function LoginForm() {
     setLoading(true);
     setError('');
 
-    const result = await login(form.email, form.password);
+    const result = await login(form.email.trim().toLowerCase(), form.password.trim());
 
     if (!result.success) {
       setError(result.error);
@@ -158,11 +158,7 @@ export function LoginForm() {
             </a>
           </div>
 
-          <div className="mt-10 p-4 rounded-xl text-center bg-slate-light border border-dashed border-slate-300">
-            <p className="text-slate-500 text-sm">
-              <strong className="text-navy">Modo Demo Activo:</strong> admin@siga.edu / admin123
-            </p>
-          </div>
+
         </div>
       </div>
     </div>
