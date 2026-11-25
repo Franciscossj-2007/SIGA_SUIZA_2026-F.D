@@ -167,7 +167,7 @@ export function ResultadoPanel() {
           Solo pendientes
         </label>
         <button onClick={cargar} className="px-3 py-2 rounded-lg text-xs font-bold text-primary bg-primary/10 hover:bg-primary/20">
-          ⟳ Recargar
+          ↻ Recargar
         </button>
       </div>
 

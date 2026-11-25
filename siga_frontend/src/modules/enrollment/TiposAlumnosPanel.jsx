@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { UserCog, Users } from 'lucide-react';
 import { apiClient } from '../../core/api/client';
 import { SectionInfoBlock } from './SectionInfoBlock';
@@ -8,10 +8,10 @@ import { useAuth } from '../../core/auth/useAuth';
 import { filtrarEstudiantes } from '../../core/studentSearch';
 
 const TIPOS = [
-  { id: 'Ingresante', tone: 'bg-sky-100 text-sky-700 border-sky-200', icon: 'ðŸ†•' },
-  { id: 'Invicto', tone: 'bg-green-100 text-green-700 border-green-200', icon: 'âœ…' },
-  { id: 'Jalado', tone: 'bg-amber-100 text-amber-700 border-amber-200', icon: 'ðŸŸ¥' },
-  { id: 'Historico', tone: 'bg-purple-100 text-purple-700 border-purple-200', icon: 'ðŸ“œ' },
+  { id: 'Ingresante', tone: 'bg-sky-100 text-sky-700 border-sky-200', icon: '🌱' },
+  { id: 'Invicto', tone: 'bg-green-100 text-green-700 border-green-200', icon: '✓' },
+  { id: 'Jalado', tone: 'bg-amber-100 text-amber-700 border-amber-200', icon: '📚' },
+  { id: 'Historico', tone: 'bg-purple-100 text-purple-700 border-purple-200', icon: '📁' },
 ];
 
 /** Sección 2 del diagrama — Tipos de alumnos históricos. */
@@ -126,7 +126,7 @@ export function TiposAlumnosPanel() {
 
       {/* Filtros */}
       <div className="glass-card p-3 flex flex-wrap items-center gap-3">
-        <span className="px-2 text-slate-400 text-xl">ðŸ”</span>
+        <span className="px-2 text-slate-400 text-xl">🔎</span>
         <input
           type="text"
           className="flex-1 min-w-[200px] bg-transparent border-none focus:ring-0 py-2 text-slate-700 placeholder-slate-400 outline-none"
@@ -156,18 +156,18 @@ export function TiposAlumnosPanel() {
           onClick={cargar}
           className="px-3 py-2 rounded-lg text-xs font-bold text-primary bg-primary/10 hover:bg-primary/20"
         >
-          âŸ³ Recargar
+          âŸ³ ↻ Recargar
         </button>
       </div>
 
       {error && (
-        <div className="p-3 rounded-xl bg-red-50 text-red-700 border border-red-100 text-sm font-medium">âŒ {error}</div>
+        <div className="p-3 rounded-xl bg-red-50 text-red-700 border border-red-100 text-sm font-medium">⚠ {error}</div>
       )}
 
       {(carreraSinPlan || (!programaFiltro && carrerasSinPlan.length > 0)) && (
         <div className="p-3 rounded-xl bg-amber-50 text-amber-700 border border-amber-100 text-xs flex flex-wrap items-center gap-3">
           <span className="flex-1 min-w-[240px]">
-            â„¹ï¸ {carreraSinPlan
+            â„¹ï¸ ⚠ {carreraSinPlan
               ? <><b>{carreraSinPlan.nombre}</b> no tiene un <b>plan de estudios vigente</b>, así que en esa carrera la detección de alumnos <b>Histórico</b> está desactivada hasta que se registre uno.</>
               : <>Sin <b>plan de estudios vigente</b>: <b>{carrerasSinPlan.map((p) => p.nombre).join(', ')}</b>. En esas carreras la detección de alumnos <b>Histórico</b> está desactivada.</>}
           </span>
@@ -178,14 +178,14 @@ export function TiposAlumnosPanel() {
               onClick={() => registrarPlan(carreraSinPlan || carrerasSinPlan[0])}
               className="px-3 py-1.5 rounded-lg bg-amber-600 text-white font-bold hover:bg-amber-700 disabled:opacity-50"
             >
-              {registrandoPlan ? 'Registrandoâ€¦' : `Registrar plan de ${(carreraSinPlan || carrerasSinPlan[0]).nombre}`}
+              {registrandoPlan ? 'Registrando...' : `Registrar plan de ${(carreraSinPlan || carrerasSinPlan[0]).nombre}`}
             </button>
           )}
         </div>
       )}
       {avisoPlan && (
         <div className={`p-3 rounded-xl text-xs font-medium border ${avisoPlan.startsWith('No se pudo') ? 'bg-red-50 text-red-700 border-red-100' : 'bg-green-50 text-green-700 border-green-100'}`}>
-          {avisoPlan.startsWith('No se pudo') ? 'âŒ' : 'âœ…'} {avisoPlan}
+          {avisoPlan.startsWith('No se pudo') ? '⚠️' : '✓'} {avisoPlan}
         </div>
       )}
 
@@ -220,7 +220,7 @@ export function TiposAlumnosPanel() {
               ) : filtrados.length === 0 ? (
                 <tr>
                   <td colSpan="9" className="py-12 text-center">
-                    <div className="text-4xl mb-3 opacity-50">ðŸ‘¥</div>
+                    <div className="text-4xl mb-3 opacity-50">📋</div>
                     <p className="text-slate-500 font-medium">No hay alumnos para este filtro.</p>
                   </td>
                 </tr>

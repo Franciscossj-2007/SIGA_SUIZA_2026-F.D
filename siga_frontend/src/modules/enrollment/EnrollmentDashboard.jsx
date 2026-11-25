@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   UserPlus, UserCog, QrCode, Scale, HeartHandshake,
   ShieldAlert, Trophy, Users, FolderOpen, PlusCircle, GraduationCap,
@@ -275,7 +275,7 @@ export function EnrollmentDashboard() {
             ))}
           </select>
         )}
-        <span className="px-4 text-slate-400 text-xl">ðŸ”</span>
+        <span className="px-4 text-slate-400 text-xl">🔎</span>
         <input 
           type="text" 
           className="w-full bg-transparent border-none focus:ring-0 py-3 text-slate-700 placeholder-slate-400 outline-none"
@@ -310,7 +310,7 @@ export function EnrollmentDashboard() {
               ) : visibles.length === 0 ? (
                 <tr>
                   <td colSpan="6" className="py-12 text-center">
-                    <div className="text-4xl mb-3 opacity-50">ðŸŽ“</div>
+                    <div className="text-4xl mb-3 opacity-50">📋</div>
                     <p className="text-slate-500 font-medium">
                       {students.length === 0
                         ? (periodoActual ? `No hay alumnos habilitados para matricularse en ${periodoActual.codigo}.` : 'No hay estudiantes registrados.')
@@ -343,7 +343,7 @@ export function EnrollmentDashboard() {
                     <td className="py-3 px-4 text-right">
                       {(student.condicion_periodo ? student.condicion_periodo === 'matriculado' : student.estado_academico === 'matriculado') ? (
                         <span className="inline-flex items-center gap-1 px-4 py-1.5 text-sm font-semibold text-blue-700 bg-blue-50 rounded-lg whitespace-nowrap">
-                          Matriculado âœ“
+                          Matriculado ✓
                         </span>
                       ) : (
                         <button

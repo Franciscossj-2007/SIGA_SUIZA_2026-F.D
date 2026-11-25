@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { QrCode, ScanLine, Camera, StopCircle, Search, FileText, X, Upload } from 'lucide-react';
 import { SectionInfoBlock } from './SectionInfoBlock';
 import { getPaymentByQr, getAvailablePayments } from '../../services/paymentService';

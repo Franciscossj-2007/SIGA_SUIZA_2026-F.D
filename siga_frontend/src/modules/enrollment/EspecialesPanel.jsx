@@ -208,7 +208,7 @@ export function EspecialesPanel() {
 
         {(casuistica === 'Traslado' || casuistica === 'Convenio') && (
           <p className="text-xs text-slate-500">
-            ℹ️ Para esta casuística el sistema verifica automáticamente la información registrada
+            Info: Para esta casuística el sistema verifica automáticamente la información registrada
             ({casuistica === 'Traslado' ? 'resolución de convalidación aprobada' : 'beneficio/convenio vigente'}).
           </p>
         )}
