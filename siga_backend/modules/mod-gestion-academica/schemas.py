@@ -1,14 +1,12 @@
-from pydantic import BaseModel, EmailStr, ConfigDict, Field, field_validator
+from pydantic import BaseModel, EmailStr, ConfigDict
 from typing import Optional, List
-import re
 from datetime import date, datetime
-from shared.validation import CodigoRequerido, DniPeruano, TextoRequerido
 
 class EstudianteBase(BaseModel):
-    codigo_estudiante: CodigoRequerido
-    dni: DniPeruano
-    nombres: TextoRequerido
-    apellidos: TextoRequerido
+    codigo_estudiante: str
+    dni: str
+    nombres: str
+    apellidos: str
     fecha_nacimiento: Optional[date] = None
     programa_id: Optional[int] = None
     email_institucional: Optional[EmailStr] = None
@@ -22,25 +20,14 @@ class EstudianteBase(BaseModel):
     modalidad_admision: Optional[str] = "ORDINARIO"
     metadata_admision: Optional[dict] = {}
 
-    @field_validator("fecha_nacimiento")
-    @classmethod
-    def validar_fecha_nacimiento(cls, valor):
-        if valor is None:
-            return valor
-        if valor > date.today():
-            raise ValueError("La fecha de nacimiento no puede ser futura")
-        if valor.year < 1900:
-            raise ValueError("La fecha de nacimiento no es válida")
-        return valor
-
 class EstudianteCreate(EstudianteBase):
     pass
 
 class EstudianteUpdate(BaseModel):
-    codigo_estudiante: Optional[CodigoRequerido] = None
-    dni: Optional[DniPeruano] = None
-    nombres: Optional[TextoRequerido] = None
-    apellidos: Optional[TextoRequerido] = None
+    codigo_estudiante: Optional[str] = None
+    dni: Optional[str] = None
+    nombres: Optional[str] = None
+    apellidos: Optional[str] = None
     fecha_nacimiento: Optional[date] = None
     programa_id: Optional[int] = None
     email_institucional: Optional[EmailStr] = None
@@ -56,13 +43,6 @@ class EstudianteUpdate(BaseModel):
     modalidad_admision: Optional[str] = "ORDINARIO"
     metadata_admision: Optional[dict] = {}
 
-    @field_validator("fecha_nacimiento")
-    @classmethod
-    def validar_fecha_nacimiento(cls, valor):
-        if valor is not None and valor > date.today():
-            raise ValueError("La fecha de nacimiento no puede ser futura")
-        return valor
-
 class EstudianteResponse(EstudianteBase):
     id: int
     estado_academico: Optional[str] = "regular"
@@ -77,7 +57,7 @@ class EstudianteResponse(EstudianteBase):
 
 class MatriculaDetalleBase(BaseModel):
     unidad_didactica_id: int
-    creditos: int = Field(..., ge=1, le=40)
+    creditos: int
 
 class MatriculaDetalleCreate(MatriculaDetalleBase):
     pass
@@ -101,28 +81,21 @@ class MatriculaResponse(MatriculaBase):
     id: int
     estado_matricula: str
     detalles: List[MatriculaDetalleResponse] = []
+    # Solo al matricular: cuenta del alumno creada o reactivada (usuario DNI@siga.edu)
+    cuenta_alumno: Optional[dict] = None
     model_config = ConfigDict(from_attributes=True)
 
 class IngestaAdmitido(BaseModel):
-    dni: DniPeruano
-    nombres: TextoRequerido
-    apellidos: TextoRequerido
-    programa_id: Optional[int] = None
-    programa_nombre: Optional[str] = None
+    dni: str
+    nombres: str
+    apellidos: str
+    programa_id: int
     periodo_id: Optional[int] = 1
     celular: Optional[str] = None
     email_personal: Optional[str] = None
     fecha_nacimiento: Optional[str] = None
     modalidad: Optional[str] = "ORDINARIO"
     metadata_completa: Optional[dict] = {}
-
-    @field_validator("email_personal")
-    @classmethod
-    def normalizar_email_personal(cls, valor):
-        if not valor:
-            return None
-        correo = str(valor).strip()
-        return correo if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", correo) else None
 
 class IngestaMasivaRequest(BaseModel):
     proceso_admision_id: Optional[str] = "ADM-2026-I"
@@ -161,7 +134,7 @@ class BoletinResponse(BaseModel):
 class HistorialAcademicoCreate(BaseModel):
     estudiante_id: int
     periodo_id: int
-    estado: TextoRequerido
+    estado: str
     resolucion: Optional[str] = None
     observaciones: Optional[str] = None
 
@@ -172,8 +145,8 @@ class HistorialAcademicoResponse(HistorialAcademicoCreate):
 
 class BeneficioEstudianteCreate(BaseModel):
     estudiante_id: int
-    tipo_beneficio: TextoRequerido
-    porcentaje_descuento: float = Field(..., gt=0, le=100)
+    tipo_beneficio: str
+    porcentaje_descuento: float
     condicion_mantenimiento: Optional[str] = None
     periodo_validez_inicio_id: int
     periodo_validez_fin_id: Optional[int] = None
@@ -185,7 +158,7 @@ class BeneficioEstudianteResponse(BeneficioEstudianteCreate):
 
 class SolicitudTramiteCreate(BaseModel):
     estudiante_id: int
-    tipo_tramite: TextoRequerido
+    tipo_tramite: str
     observaciones: Optional[str] = None
 
 class SolicitudTramiteResponse(SolicitudTramiteCreate):
@@ -198,9 +171,9 @@ class SolicitudTramiteResponse(SolicitudTramiteCreate):
 
 class ConvalidacionDetalleCreate(BaseModel):
     unidad_destino_id: int
-    curso_origen: TextoRequerido
-    nota_reconocida: Optional[float] = Field(None, ge=0, le=20)
-    creditos_reconocidos: Optional[int] = Field(None, ge=0, le=40)
+    curso_origen: str
+    nota_reconocida: Optional[float] = None
+    creditos_reconocidos: Optional[int] = None
 
 class ConvalidacionDetalleResponse(ConvalidacionDetalleCreate):
     id: int
@@ -209,18 +182,11 @@ class ConvalidacionDetalleResponse(ConvalidacionDetalleCreate):
 
 class ResolucionConvalidacionCreate(BaseModel):
     estudiante_id: int
-    numero_resolucion: TextoRequerido
+    numero_resolucion: str
     fecha_emision: date
-    tipo_convalidacion: TextoRequerido
+    tipo_convalidacion: str
     institucion_origen: Optional[str] = None
     detalles: List[ConvalidacionDetalleCreate]
-
-    @field_validator("fecha_emision")
-    @classmethod
-    def validar_fecha_emision(cls, valor):
-        if valor > date.today():
-            raise ValueError("La fecha de emisión no puede ser futura")
-        return valor
 
 class ResolucionConvalidacionResponse(BaseModel):
     id: int

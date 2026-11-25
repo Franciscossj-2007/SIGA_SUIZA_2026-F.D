@@ -1,12 +1,12 @@
 from fastapi import APIRouter, HTTPException, Depends, status, Request, UploadFile, File
+from seguridad import acceso_estudiante, id_ficha_propia, identidad, solo_padron, solo_personal
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, text
+from sqlalchemy import select, or_, text, bindparam
 from sqlalchemy.orm import selectinload
 from database import get_db, OutboxEvent
 from models import Estudiante, Matricula, MatriculaDetalle
 from schemas import EstudianteCreate, EstudianteResponse, EstudianteUpdate, MatriculaCreate, MatriculaResponse, IngestaMasivaRequest
-from programas_catalog import es_programa_valido, resolver_programa_id
 from datetime import datetime
 from typing import List, Optional
 from pathlib import Path
@@ -117,115 +117,89 @@ async def ingesta_admitidos(request: Request, data: IngestaMasivaRequest, db: As
     Crea los expedientes de estudiantes y dispara eventos para integrarlos al ecosistema (crear usuarios, matricular, etc).
     """
     estudiantes_creados = 0
-    estudiantes_existentes = 0
-    omitidos = 0
-    errores = []
-
+    
     for admitido in data.admitidos:
-        programa_id = admitido.programa_id
-        if not es_programa_valido(programa_id):
-            candidatos = [
-                programa_id,
-                admitido.programa_nombre,
-                (admitido.metadata_completa or {}).get("programa_id"),
-                (admitido.metadata_completa or {}).get("programa_nombre"),
-                (admitido.metadata_completa or {}).get("programa"),
-                (admitido.metadata_completa or {}).get("PROGRAMA DE   ESTUDIOS"),
-                (admitido.metadata_completa or {}).get("PROGRAMA DE ESTUDIOS"),
-            ]
-            for candidato in candidatos:
-                resuelto = resolver_programa_id(candidato)
-                if es_programa_valido(resuelto):
-                    programa_id = resuelto
-                    break
-
-        if not es_programa_valido(programa_id):
-            omitidos += 1
-            errores.append(
-                f"DNI {admitido.dni}: programa no reconocido ({admitido.programa_id or admitido.programa_nombre or 'sin programa'})."
-            )
-            continue
-
-        programa_id = int(programa_id)
-
         # 1. Capa Anticorrupción: Validar si ya existe
         existing = await db.execute(select(Estudiante).where(Estudiante.dni == admitido.dni))
         if existing.scalar_one_or_none():
-            estudiantes_existentes += 1
-            continue  # Ya existe, saltamos
-
+            continue # Ya existe, saltamos
+            
         # Generar código universitario estándar
         year = datetime.now().year
         codigo = f"{year}-{admitido.dni}"
-
+        
         # 2. Crear Estudiante
         db_estudiante = Estudiante(
             codigo_estudiante=codigo,
             dni=admitido.dni,
             nombres=admitido.nombres,
             apellidos=admitido.apellidos,
-            programa_id=programa_id,
+            programa_id=admitido.programa_id,
             celular=admitido.celular,
             email_personal=admitido.email_personal,
             modalidad_admision=admitido.modalidad,
-            metadata_admision=admitido.metadata_completa or {}
+            metadata_admision=admitido.metadata_completa
         )
-        try:
-            async with db.begin_nested():
-                db.add(db_estudiante)
-                await db.flush()  # para obtener el ID
-
-                # 3. Disparar evento para matricular en Ciclo I automáticamente
-                # y para que mod-usuarios le cree su cuenta
-                event_payload = {
-                    "event_id": str(uuid.uuid4()),
-                    "event_type": "gestion_academica.admision.estudiante_ingresado",
-                    "source": "mod-gestion-academica",
-                    "timestamp": datetime.utcnow().isoformat() + "Z",
-                    "version": "1.0.0",
-                    "data": {
-                        "estudiante_id": db_estudiante.id,
-                        "dni": db_estudiante.dni,
-                        "nombres": db_estudiante.nombres,
-                        "apellidos": db_estudiante.apellidos,
-                        "programa_id": programa_id,
-                        "periodo_id": admitido.periodo_id,
-                        "proceso_admision_id": data.proceso_admision_id
-                    },
-                    "metadata": {"request_id": request.headers.get("X-Request-ID", "unknown")}
-                }
-                db.add(OutboxEvent(event_type=event_payload["event_type"], payload=event_payload))
-        except Exception:
-            omitidos += 1
-            errores.append(f"DNI {admitido.dni}: no se pudo registrar (posible DNI/código duplicado).")
-            continue
-
+        db.add(db_estudiante)
+        await db.flush() # para obtener el ID
+        
+        # 3. Disparar evento para matricular en Ciclo I automáticamente
+        # y para que mod-usuarios le cree su cuenta
+        event_payload = {
+            "event_id": str(uuid.uuid4()),
+            "event_type": "gestion_academica.admision.estudiante_ingresado",
+            "source": "mod-gestion-academica",
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "version": "1.0.0",
+            "data": {
+                "estudiante_id": db_estudiante.id,
+                "dni": db_estudiante.dni,
+                "nombres": db_estudiante.nombres,
+                "apellidos": db_estudiante.apellidos,
+                "programa_id": admitido.programa_id,
+                "periodo_id": admitido.periodo_id,
+                "proceso_admision_id": data.proceso_admision_id
+            },
+            "metadata": {"request_id": request.headers.get("X-Request-ID", "unknown")}
+        }
+        
+        db.add(OutboxEvent(event_type=event_payload["event_type"], payload=event_payload))
         estudiantes_creados += 1
-
+        
     await db.commit()
-    return {
-        "message": "Ingesta procesada",
-        "estudiantes_creados": estudiantes_creados,
-        "estudiantes_existentes": estudiantes_existentes,
-        "omitidos": omitidos,
-        "errores": errores,
-    }
+    return {"message": "Ingesta procesada", "estudiantes_creados": estudiantes_creados}
 
 @router.post("/estudiantes/", response_model=EstudianteResponse, status_code=status.HTTP_201_CREATED)
 async def crear_estudiante(request: Request, data: EstudianteCreate, db: AsyncSession = Depends(get_db)):
-    if data.programa_id is not None and not es_programa_valido(data.programa_id):
-        raise HTTPException(status_code=400, detail="El programa de estudio no es válido. Debe ser uno de los 11 programas oficiales.")
-    existing = await db.execute(select(Estudiante).where(
-        or_(Estudiante.dni == data.dni, Estudiante.codigo_estudiante == data.codigo_estudiante)
-    ))
-    existing_student = existing.scalar_one_or_none()
-    if existing_student:
-        if existing_student.dni == data.dni:
-            raise HTTPException(status_code=400, detail="El DNI ya se encuentra registrado en el sistema.")
-        else:
-            raise HTTPException(status_code=400, detail="El código de estudiante ya existe. Genere uno nuevo.")
+    def _norm(t):
+        return " ".join(str(t or "").lower().split())
 
-    db_estudiante = Estudiante(**data.model_dump())
+    # DNI y código se consultan por separado: con un solo OR, si el DNI era de un alumno y el
+    # código de otro, la consulta devolvía dos filas y el servidor fallaba con error 500.
+    por_dni = (await db.execute(select(Estudiante).where(Estudiante.dni == data.dni))).scalars().first()
+    if por_dni:
+        mismo_envio = (por_dni.codigo_estudiante == data.codigo_estudiante
+                       and _norm(por_dni.nombres) == _norm(data.nombres)
+                       and _norm(por_dni.apellidos) == _norm(data.apellidos))
+        if mismo_envio:
+            # El mismo registro llegó dos veces (doble clic o respuesta perdida): ya está guardado.
+            return por_dni
+        raise HTTPException(
+            status_code=400,
+            detail=f"El DNI {data.dni} ya está registrado para {por_dni.nombres} {por_dni.apellidos} "
+                   f"(código {por_dni.codigo_estudiante}).",
+        )
+
+    datos = data.model_dump()
+    codigo_ocupado = (await db.execute(
+        select(Estudiante.id).where(Estudiante.codigo_estudiante == data.codigo_estudiante)
+    )).scalars().first()
+    if codigo_ocupado:
+        # El código lo propone el sistema y el formulario no deja cambiarlo: si otro registro lo
+        # tomó antes (dos personas registrando a la vez), se asigna el siguiente libre.
+        datos["codigo_estudiante"] = (await obtener_siguiente_codigo(db))["codigo_estudiante"]
+
+    db_estudiante = Estudiante(**datos)
     db.add(db_estudiante)
     await db.flush()
     
@@ -244,18 +218,79 @@ async def crear_estudiante(request: Request, data: EstudianteCreate, db: AsyncSe
     await db.refresh(db_estudiante)
     return db_estudiante
 
-@router.get("/estudiantes/")
-async def obtener_estudiantes(programa_id: Optional[int] = None, db: AsyncSession = Depends(get_db)):
+# ---------------------------------------------------------------------------
+# Cachimbos e históricos por periodo
+# Histórico: ya tuvo una matrícula (no anulada) en OTRO periodo -> puede matricularse en uno nuevo.
+# Cachimbo: nunca se matriculó -> solo en el periodo de inicio de SU año de ingreso
+# (código "2026-..." -> 2026-I). Al abrir 2026-II o 2027-I no deben aparecer los cachimbos de 2026.
+# ---------------------------------------------------------------------------
+import re as _re
+
+_ESTADOS_ANULADOS = ("anulada", "anulado", "anulada_por_reserva")
+
+
+def _anio_ingreso(est) -> Optional[int]:
+    m = _re.match(r"^\s*(\d{4})-", str(getattr(est, "codigo_estudiante", "") or ""))
+    if m:
+        return int(m.group(1))
+    creado = getattr(est, "created_at", None)
+    return creado.year if creado else None
+
+
+def _anio_periodo(codigo: str) -> Optional[int]:
+    m = _re.match(r"^\s*(\d{4})", str(codigo or ""))
+    return int(m.group(1)) if m else None
+
+
+async def _periodos_con_matricula(db) -> dict:
+    """{estudiante_id: {periodo_id, ...}} con matrículas no anuladas."""
+    from sqlalchemy import text
+    filas = (await db.execute(text(
+        "SELECT estudiante_id, periodo_id FROM matriculas WHERE estado_matricula NOT IN :anuladas"
+    ).bindparams(bindparam("anuladas", expanding=True)), {"anuladas": list(_ESTADOS_ANULADOS)})).all()
+    salida = {}
+    for est_id, per_id in filas:
+        salida.setdefault(est_id, set()).add(per_id)
+    return salida
+
+
+def _condicion_en_periodo(est, periodo_id: int, codigo_periodo: str, periodos_est: set) -> str:
+    """'matriculado' | 'historico' | 'cachimbo' | 'no_habilitado' para el periodo indicado."""
+    from domain import es_periodo_inicio_anio
+    if periodo_id in periodos_est:
+        return "matriculado"
+    if any(p != periodo_id for p in periodos_est):
+        return "historico"
+    anio = _anio_ingreso(est)
+    if es_periodo_inicio_anio(codigo_periodo) and anio and anio == _anio_periodo(codigo_periodo):
+        return "cachimbo"
+    return "no_habilitado"
+
+
+@router.get("/estudiantes/", dependencies=[Depends(solo_padron)])
+async def obtener_estudiantes(programa_id: Optional[int] = None, periodo_id: Optional[int] = None,
+                              db: AsyncSession = Depends(get_db)):
+    """Padrón. Con ``periodo_id`` solo devuelve a los alumnos habilitados para matricularse en ese
+    periodo (históricos, cachimbos de ese año y los ya matriculados en él) e indica su condición."""
     import traceback
+    from sqlalchemy import text
     try:
-        if programa_id is not None and not es_programa_valido(programa_id):
-            raise HTTPException(status_code=400, detail="El programa de estudio no es válido. Debe ser uno de los 11 programas oficiales.")
         query = select(Estudiante).order_by(Estudiante.apellidos)
         if programa_id is not None:
             query = query.where(Estudiante.programa_id == programa_id)
         result = await db.execute(query)
         rows = result.scalars().all()
-        print(f"[DEBUG] Estudiantes encontrados: {len(rows)}")
+
+        condiciones = {}
+        if periodo_id is not None:
+            codigo_periodo = (await db.execute(
+                text("SELECT codigo FROM periodos_academicos WHERE id = :p"), {"p": periodo_id}
+            )).scalar() or ""
+            por_est = await _periodos_con_matricula(db)
+            for r in rows:
+                condiciones[r.id] = _condicion_en_periodo(r, periodo_id, codigo_periodo, por_est.get(r.id, set()))
+            rows = [r for r in rows if condiciones[r.id] != "no_habilitado"]
+
         return [
             {
                 "id": r.id,
@@ -276,17 +311,16 @@ async def obtener_estudiantes(programa_id: Optional[int] = None, db: AsyncSessio
                 "fecha_limite_documentos": r.fecha_limite_documentos.isoformat() if r.fecha_limite_documentos else None,
                 "modalidad_admision": r.modalidad_admision,
                 "metadata_admision": r.metadata_admision or {},
+                "condicion_periodo": condiciones.get(r.id),
             }
             for r in rows
         ]
-    except HTTPException:
-        raise
     except Exception as e:
         tb = traceback.format_exc()
         print(f"[ERROR] obtener_estudiantes: {e}\n{tb}")
-        raise HTTPException(status_code=500, detail="No se pudo obtener la lista de estudiantes.")
+        return {"error": str(e), "type": type(e).__name__, "traceback": tb}
 
-@router.get("/estudiantes/siguiente-codigo")
+@router.get("/estudiantes/siguiente-codigo", dependencies=[Depends(solo_padron)])
 async def obtener_siguiente_codigo(db: AsyncSession = Depends(get_db)):
     """Devuelve el siguiente código de estudiante único del año actual (formato AAAA-000000)."""
     year = datetime.now().year
@@ -320,7 +354,19 @@ async def actualizar_pago_matricula(estudiante_id: int, request: Request, pagado
     await db.refresh(estudiante)
     return estudiante
 
-@router.get("/estudiantes/{estudiante_id}", response_model=EstudianteResponse)
+@router.get("/estudiantes/mi-ficha")
+async def mi_ficha(i=Depends(identidad), db: AsyncSession = Depends(get_db)):
+    """Ficha del alumno que inició sesión (se enlaza por correo). El estudiante ya no necesita
+    leer el padrón completo para encontrar la suya."""
+    estudiante_id = await id_ficha_propia(db, i)
+    if not estudiante_id:
+        raise HTTPException(status_code=404, detail="Tu cuenta no está vinculada a una ficha de estudiante.")
+    r = (await db.execute(select(Estudiante).where(Estudiante.id == estudiante_id))).scalar_one()
+    return {"id": r.id, "codigo_estudiante": r.codigo_estudiante, "dni": r.dni, "nombres": r.nombres,
+            "apellidos": r.apellidos, "programa_id": r.programa_id, "estado_academico": r.estado_academico}
+
+
+@router.get("/estudiantes/{estudiante_id}", response_model=EstudianteResponse, dependencies=[Depends(acceso_estudiante)])
 async def obtener_estudiante(estudiante_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Estudiante).where(Estudiante.id == estudiante_id))
     db_estudiante = result.scalar_one_or_none()
@@ -344,33 +390,62 @@ def _numero_ciclo(nombre_modulo, orden):
             return int(match.group(1))
     return orden if orden is not None else 1
 
-async def _construir_ciclos(db, estudiante_id, plan_id, periodo_id=None):
-    """Documento historico: agrupa las unidades del plan por ciclo con la mejor nota del estudiante."""
+async def _construir_ciclos(db, estudiante_id, plan_id, periodo_id=None, programa_id=None):
+    """Documento historico: agrupa las unidades por ciclo con la mejor nota del estudiante.
+
+    Las notas (evaluacion_registros) y la carga lectiva usan los ids de la MALLA de la carrera
+    (programa_unidades). Antes se armaba con el catálogo del plan (unidades_plan), cuyos ids son
+    otros: las notas nunca coincidían y el alumno veía sus cursos sin notas. Se usa la malla y,
+    solo si la carrera no tiene malla, el catálogo del plan.
+    """
     from sqlalchemy import text
 
-    if not plan_id:
-        return [], 0
+    modulos, unidades = [], []
+    if programa_id:
+        modulos = [dict(m) for m in (await db.execute(
+            text("""
+                SELECT id, nombre, orden, periodo AS ciclo_num
+                FROM programa_modulos WHERE programa_id = :pid
+                ORDER BY periodo, orden, id
+            """),
+            {"pid": programa_id}
+        )).mappings().all()]
+        if modulos:
+            ph = ','.join(f':m{i}' for i in range(len(modulos)))
+            unidades = (await db.execute(
+                text(f"""
+                    SELECT pu.id, pu.programa_modulo_id AS modulo_id, pu.nombre, up.codigo, pu.creditos,
+                           COALESCE(pu.horas_teoria, 0) + COALESCE(pu.horas_practica, 0) AS horas,
+                           up.tipo, pu.orden
+                    FROM programa_unidades pu
+                    LEFT JOIN unidades_plan up ON up.id = pu.unidad_plan_id
+                    WHERE pu.programa_modulo_id IN ({ph})
+                    ORDER BY pu.programa_modulo_id, pu.orden, pu.id
+                """),
+                {f'm{i}': m["id"] for i, m in enumerate(modulos)}
+            )).mappings().all()
 
-    result_mod = await db.execute(
-        text("SELECT id, nombre, orden FROM modulos_plan WHERE plan_id = :pid ORDER BY orden, id"),
-        {"pid": plan_id}
-    )
-    modulos = result_mod.mappings().all()
     if not modulos:
-        return [], 0
-
-    modulo_ids = [m["id"] for m in modulos]
-    placeholders = ','.join(f':m{i}' for i in range(len(modulo_ids)))
-    result_uni = await db.execute(
-        text(f"""
-            SELECT id, modulo_id, nombre, codigo, creditos, horas, tipo, orden
-            FROM unidades_plan
-            WHERE modulo_id IN ({placeholders})
-            ORDER BY modulo_id, orden, id
-        """),
-        {f'm{i}': mid for i, mid in enumerate(modulo_ids)}
-    )
-    unidades = result_uni.mappings().all()
+        if not plan_id:
+            return [], 0
+        modulos = [dict(m) for m in (await db.execute(
+            text("SELECT id, nombre, orden FROM modulos_plan WHERE plan_id = :pid ORDER BY orden, id"),
+            {"pid": plan_id}
+        )).mappings().all()]
+        if not modulos:
+            return [], 0
+        for m in modulos:
+            m["ciclo_num"] = _numero_ciclo(m["nombre"], m["orden"])
+        placeholders = ','.join(f':m{i}' for i in range(len(modulos)))
+        unidades = (await db.execute(
+            text(f"""
+                SELECT id, modulo_id, nombre, codigo, creditos, horas, tipo, orden
+                FROM unidades_plan
+                WHERE modulo_id IN ({placeholders})
+                ORDER BY modulo_id, orden, id
+            """),
+            {f'm{i}': m["id"] for i, m in enumerate(modulos)}
+        )).mappings().all()
 
     result_eval = await db.execute(
         text("""
@@ -439,7 +514,7 @@ async def _construir_ciclos(db, estudiante_id, plan_id, periodo_id=None):
 
     ciclos = {}
     for mod in modulos:
-        num = _numero_ciclo(mod["nombre"], mod["orden"])
+        num = mod.get("ciclo_num") or _numero_ciclo(mod["nombre"], mod["orden"])
         ciclo = ciclos.setdefault(num, {"ciclo": num, "titulo": _titulo_ciclo(num), "unidades": []})
         for u in unidades_por_modulo.get(mod["id"], []):
             reg = mejor.get(u["id"])
@@ -515,7 +590,7 @@ async def _periodo_por_defecto_boletin(db, estudiante_id):
 
     raise HTTPException(status_code=404, detail="No hay periodos academicos registrados")
 
-@router.get("/estudiantes/{estudiante_id}/boletin")
+@router.get("/estudiantes/{estudiante_id}/boletin", dependencies=[Depends(acceso_estudiante)])
 async def obtener_boletin(estudiante_id: int, periodo_id: Optional[int] = None, db: AsyncSession = Depends(get_db)):
     from sqlalchemy import text
 
@@ -543,15 +618,17 @@ async def obtener_boletin(estudiante_id: int, periodo_id: Optional[int] = None, 
 
     result_plan = await db.execute(
         text("""
-            SELECT p.creditos_totales, p.nombre as plan_nombre, p.nivel_formativo, pr.plan_estudio_id
+            SELECT pr.nombre as programa_nombre, p.creditos_totales, p.nombre as plan_nombre,
+                   p.nivel_formativo, pr.plan_estudio_id
             FROM programas_estudio pr
-            JOIN planes_estudio p ON pr.plan_estudio_id = p.id
+            LEFT JOIN planes_estudio p ON pr.plan_estudio_id = p.id
             WHERE pr.id = :prog_id
         """),
         {"prog_id": estudiante.programa_id}
     )
+    # LEFT JOIN: una carrera sin plan importado sigue mostrando su nombre en el boletín.
     plan_row = result_plan.mappings().first()
-    creditos_totales = plan_row["creditos_totales"] if plan_row else 0
+    creditos_totales = (plan_row["creditos_totales"] or 0) if plan_row else 0
 
     result_creditos_aprob = await db.execute(
         text("""
@@ -568,8 +645,9 @@ async def obtener_boletin(estudiante_id: int, periodo_id: Optional[int] = None, 
     cursos_periodo = []
     if matricula and matricula.detalles:
         for det in matricula.detalles:
+            # El detalle guarda el id de la malla de la carrera (programa_unidades), no del plan
             result_unidad = await db.execute(
-                text("SELECT nombre FROM unidades_plan WHERE id = :uid"),
+                text("SELECT nombre FROM programa_unidades WHERE id = :uid"),
                 {"uid": det.unidad_didactica_id}
             )
             unidad_row = result_unidad.mappings().first()
@@ -641,7 +719,7 @@ async def obtener_boletin(estudiante_id: int, periodo_id: Optional[int] = None, 
     observaciones = observ_row["observaciones"] if observ_row else None
 
     plan_estudio_id = plan_row["plan_estudio_id"] if plan_row else None
-    ciclos, ciclos_totales = await _construir_ciclos(db, estudiante_id, plan_estudio_id, periodo_id)
+    ciclos, ciclos_totales = await _construir_ciclos(db, estudiante_id, plan_estudio_id, periodo_id, estudiante.programa_id)
     ciclos_completados = sum(1 for c in ciclos if c.get("completado"))
 
     return {
@@ -653,7 +731,7 @@ async def obtener_boletin(estudiante_id: int, periodo_id: Optional[int] = None, 
             "dni": estudiante.dni,
             "celular": estudiante.celular,
             "email_personal": estudiante.email_personal,
-            "programa_nombre": plan_row["plan_nombre"] if plan_row else None,
+            "programa_nombre": (plan_row["programa_nombre"] or plan_row["plan_nombre"]) if plan_row else None,
             "periodo_codigo": periodo_codigo,
             "fecha_emision": datetime.utcnow().strftime("%d/%m/%Y"),
         },
@@ -710,12 +788,63 @@ async def actualizar_estudiante(estudiante_id: int, data: EstudianteUpdate, requ
     await db.refresh(db_estudiante)
     return db_estudiante
 
+# Registros que dependen de un estudiante: (nombre, SQL para contarlos, SQL para borrarlos).
+# El orden importa: primero lo que apunta a matrículas/resoluciones y al final esas tablas.
+_SUB_MATRICULAS = "SELECT id FROM matriculas WHERE estudiante_id = :e"
+_SUB_DETALLES = f"SELECT id FROM matricula_detalles WHERE matricula_id IN ({_SUB_MATRICULAS})"
+_REGISTROS_ESTUDIANTE = [
+    ("notas", "evaluacion_registros",
+     f"estudiante_id = :e OR matricula_detalle_id IN ({_SUB_DETALLES})"),
+    # Solo estudiante_id: es la columna del modelo. Algunas bases locales tienen además
+    # matricula_id, pero en Railway no existe y la consulta fallaba.
+    ("pagos de Caja", "tesoreria_pagos", "estudiante_id = :e"),
+    ("cursos matriculados", "matricula_detalles", f"matricula_id IN ({_SUB_MATRICULAS})"),
+    ("matrículas", "matriculas", "estudiante_id = :e"),
+    ("cursos convalidados", "convalidaciones_detalle",
+     "resolucion_id IN (SELECT id FROM resoluciones_convalidacion WHERE estudiante_id = :e)"),
+    ("resoluciones de convalidación", "resoluciones_convalidacion", "estudiante_id = :e"),
+    ("trámites", "solicitudes_tramites", "estudiante_id = :e"),
+    ("historial académico", "historial_academico", "estudiante_id = :e"),
+    ("beneficios", "beneficios_estudiante", "estudiante_id = :e"),
+    ("prácticas", "registros_practicas", "estudiante_id = :e"),
+]
+
+
+async def _contar_registros_estudiante(db: AsyncSession, estudiante_id: int) -> dict:
+    conteo = {}
+    for nombre, tabla, condicion in _REGISTROS_ESTUDIANTE:
+        existe = (await db.execute(text("SELECT to_regclass(:t)"), {"t": f"public.{tabla}"})).scalar()
+        if not existe:
+            continue
+        total = (await db.execute(text(f"SELECT count(*) FROM {tabla} WHERE {condicion}"), {"e": estudiante_id})).scalar()
+        if total:
+            conteo[nombre] = total
+    return conteo
+
+
 @router.delete("/estudiantes/{estudiante_id}")
-async def eliminar_estudiante(estudiante_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+async def eliminar_estudiante(estudiante_id: int, request: Request, eliminar_registros: bool = False,
+                              db: AsyncSession = Depends(get_db)):
+    """Elimina un estudiante. Si tiene matrículas, pagos, notas u otros registros, solo se
+    elimina con `eliminar_registros=true`, que borra también esos registros."""
     result = await db.execute(select(Estudiante).where(Estudiante.id == estudiante_id))
     db_estudiante = result.scalar_one_or_none()
     if not db_estudiante:
         raise HTTPException(status_code=404, detail="Estudiante no encontrado")
+
+    registros = await _contar_registros_estudiante(db, estudiante_id)
+    if registros and not eliminar_registros:
+        detalle = ", ".join(f"{n} {nombre}" for nombre, n in registros.items())
+        raise HTTPException(
+            status_code=409,
+            detail=f"El estudiante tiene registros asociados ({detalle}). "
+                   "Para eliminarlo junto con esos registros use eliminar_registros=true.",
+        )
+    if registros:
+        for _nombre, tabla, condicion in _REGISTROS_ESTUDIANTE:
+            existe = (await db.execute(text("SELECT to_regclass(:t)"), {"t": f"public.{tabla}"})).scalar()
+            if existe:
+                await db.execute(text(f"DELETE FROM {tabla} WHERE {condicion}"), {"e": estudiante_id})
 
     await db.delete(db_estudiante)
 
@@ -725,7 +854,7 @@ async def eliminar_estudiante(estudiante_id: int, request: Request, db: AsyncSes
         "source": "mod-gestion-academica",
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "version": "1.0.0",
-        "data": {"id": estudiante_id},
+        "data": {"id": estudiante_id, "dni": db_estudiante.dni, "registros_eliminados": registros},
         "metadata": {"request_id": request.headers.get("X-Request-ID", "unknown")}
     }
     
@@ -737,15 +866,35 @@ async def eliminar_estudiante(estudiante_id: int, request: Request, db: AsyncSes
 async def realizar_matricula(request: Request, data: MatriculaCreate, db: AsyncSession = Depends(get_db)):
     # Validar si ya está matriculado en este periodo
     from sqlalchemy.future import select
+    # Anular guarda "anulada": antes se comparaba con "anulado" y una matrícula anulada seguía
+    # impidiendo volver a matricular al alumno en ese periodo.
     existing = await db.execute(
         select(Matricula).where(
             Matricula.estudiante_id == data.estudiante_id,
             Matricula.periodo_id == data.periodo_id,
-            Matricula.estado_matricula != 'anulado'
+            Matricula.estado_matricula.notin_(["anulada", "anulado"])
         )
     )
     if existing.scalars().first():
         raise HTTPException(status_code=400, detail="El estudiante ya cuenta con una matrícula registrada para este periodo académico.")
+
+    # Cachimbo fuera de su periodo de ingreso: no se matricula (solo los históricos pasan a periodos nuevos)
+    est_val = (await db.execute(select(Estudiante).where(Estudiante.id == data.estudiante_id))).scalar_one_or_none()
+    if not est_val:
+        raise HTTPException(status_code=404, detail="Estudiante no encontrado")
+    codigo_per = (await db.execute(
+        text("SELECT codigo FROM periodos_academicos WHERE id = :p"), {"p": data.periodo_id}
+    )).scalar() or ""
+    periodos_est = (await _periodos_con_matricula(db)).get(est_val.id, set())
+    if _condicion_en_periodo(est_val, data.periodo_id, codigo_per, periodos_est) == "no_habilitado":
+        anio = _anio_ingreso(est_val)
+        raise HTTPException(
+            status_code=400,
+            detail=(f"{est_val.apellidos}, {est_val.nombres} es ingresante (cachimbo){f' de {anio}' if anio else ''} "
+                    f"y nunca se matriculó. En {codigo_per} solo pueden matricularse alumnos que ya estudiaron "
+                    f"(históricos); los cachimbos se matriculan únicamente en el periodo de inicio de su año de ingreso"
+                    f"{f' ({anio}-I)' if anio else ''}.")
+        )
 
     # Validar créditos
     total_creditos = sum(d.creditos for d in data.detalles)
@@ -754,6 +903,9 @@ async def realizar_matricula(request: Request, data: MatriculaCreate, db: AsyncS
 
     # Separar detalles
     matricula_data = data.model_dump(exclude={"detalles"})
+    # La matrícula registrada queda confirmada (así lo indica también su evento). Antes quedaba
+    # "pendiente" hasta pulsar "Consolidar" y el docente no podía registrar las notas del alumno.
+    matricula_data["estado_matricula"] = "confirmada"
     db_matricula = Matricula(**matricula_data)
     db.add(db_matricula)
     await db.flush() # Para obtener db_matricula.id
@@ -761,7 +913,17 @@ async def realizar_matricula(request: Request, data: MatriculaCreate, db: AsyncS
     for det in data.detalles:
         db_detalle = MatriculaDetalle(matricula_id=db_matricula.id, **det.model_dump())
         db.add(db_detalle)
-    
+
+    # El alumno pasa a "matriculado" (igual que en la matrícula automática de Admisión);
+    # sin esto la lista seguía mostrándolo como postulante con el botón "Matricular".
+    est_matriculado = (await db.execute(select(Estudiante).where(Estudiante.id == data.estudiante_id))).scalar_one_or_none()
+    cuenta_alumno = None
+    if est_matriculado:
+        est_matriculado.estado_academico = "matriculado"
+        # Cuenta del alumno: se crea en su primera matrícula (DNI@siga.edu / DNI) o se reactiva
+        from cuenta_estudiante import asegurar_cuenta_estudiante
+        cuenta_alumno = await asegurar_cuenta_estudiante(db, est_matriculado)
+
     event_payload = {
         "event_id": str(uuid.uuid4()),
         "event_type": "gestion_academica.matricula.confirmada",
@@ -776,19 +938,21 @@ async def realizar_matricula(request: Request, data: MatriculaCreate, db: AsyncS
     await db.commit()
     
     result = await db.execute(select(Matricula).options(selectinload(Matricula.detalles)).where(Matricula.id == db_matricula.id))
-    return result.scalar_one()
+    respuesta = MatriculaResponse.model_validate(result.scalar_one()).model_dump()
+    respuesta["cuenta_alumno"] = cuenta_alumno
+    return respuesta
 
-@router.get("/matriculas/", response_model=List[MatriculaResponse])
+@router.get("/matriculas/", response_model=List[MatriculaResponse], dependencies=[Depends(solo_personal)])
 async def obtener_matriculas(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Matricula).options(selectinload(Matricula.detalles)).order_by(Matricula.created_at.desc()))
     return result.scalars().all()
 
-@router.get("/matriculas/estudiante/{estudiante_id}", response_model=List[MatriculaResponse])
+@router.get("/matriculas/estudiante/{estudiante_id}", response_model=List[MatriculaResponse], dependencies=[Depends(acceso_estudiante)])
 async def obtener_matriculas_estudiante(estudiante_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Matricula).options(selectinload(Matricula.detalles)).where(Matricula.estudiante_id == estudiante_id).order_by(Matricula.created_at.desc()))
     return result.scalars().all()
 
-@router.get("/matriculas/unidad/{unidad_id}/periodo/{periodo_id}")
+@router.get("/matriculas/unidad/{unidad_id}/periodo/{periodo_id}", dependencies=[Depends(solo_personal)])
 async def obtener_estudiantes_por_unidad(unidad_id: int, periodo_id: int, db: AsyncSession = Depends(get_db)):
     query = (
         select(Estudiante, MatriculaDetalle.id.label("matricula_detalle_id"))
@@ -886,7 +1050,16 @@ async def anular_matricula(matricula_id: int, request: Request, db: AsyncSession
         raise HTTPException(status_code=404, detail="Matrícula no encontrada")
 
     db_matricula.estado_matricula = "anulada"
-    
+    await db.flush()
+    # Si ya no le queda ninguna matrícula vigente, el alumno deja de figurar como matriculado.
+    otra_vigente = (await db.execute(select(Matricula.id).where(
+        Matricula.estudiante_id == db_matricula.estudiante_id,
+        Matricula.estado_matricula.notin_(["anulada", "anulado"]),
+    ))).scalars().first()
+    est_anulado = (await db.execute(select(Estudiante).where(Estudiante.id == db_matricula.estudiante_id))).scalar_one_or_none()
+    if est_anulado and not otra_vigente and est_anulado.estado_academico == "matriculado":
+        est_anulado.estado_academico = "postulante"
+
     event_payload = {
         "event_id": str(uuid.uuid4()),
         "event_type": "gestion_academica.matricula.anulada",
@@ -921,7 +1094,7 @@ async def crear_tramite(data: SolicitudTramiteCreate, db: AsyncSession = Depends
     await db.refresh(db_tramite)
     return db_tramite
 
-@router.get("/tramites/", response_model=List[SolicitudTramiteResponse])
+@router.get("/tramites/", response_model=List[SolicitudTramiteResponse], dependencies=[Depends(solo_personal)])
 async def obtener_tramites(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(SolicitudTramite).order_by(SolicitudTramite.fecha_solicitud.desc()))
     return result.scalars().all()
@@ -964,7 +1137,7 @@ async def registrar_convalidacion(data: ResolucionConvalidacionCreate, db: Async
     result = await db.execute(select(ResolucionConvalidacion).options(selectinload(ResolucionConvalidacion.detalles)).where(ResolucionConvalidacion.id == db_resolucion.id))
     return result.scalar_one()
 
-@router.get("/convalidaciones/", response_model=List[ResolucionConvalidacionResponse])
+@router.get("/convalidaciones/", response_model=List[ResolucionConvalidacionResponse], dependencies=[Depends(solo_personal)])
 async def listar_convalidaciones(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(ResolucionConvalidacion)
@@ -973,7 +1146,7 @@ async def listar_convalidaciones(db: AsyncSession = Depends(get_db)):
     )
     return result.scalars().all()
 
-@router.get("/convalidaciones/estudiante/{estudiante_id}", response_model=List[ResolucionConvalidacionResponse])
+@router.get("/convalidaciones/estudiante/{estudiante_id}", response_model=List[ResolucionConvalidacionResponse], dependencies=[Depends(acceso_estudiante)])
 async def obtener_convalidaciones_estudiante(estudiante_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ResolucionConvalidacion).options(selectinload(ResolucionConvalidacion.detalles)).where(ResolucionConvalidacion.estudiante_id == estudiante_id))
     return result.scalars().all()
@@ -988,7 +1161,7 @@ async def registrar_beneficio(data: BeneficioEstudianteCreate, db: AsyncSession 
     await db.refresh(db_beneficio)
     return db_beneficio
 
-@router.get("/beneficios/", response_model=List[BeneficioEstudianteResponse])
+@router.get("/beneficios/", response_model=List[BeneficioEstudianteResponse], dependencies=[Depends(solo_personal)])
 async def listar_beneficios(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(BeneficioEstudiante).order_by(BeneficioEstudiante.id.desc()))
     return result.scalars().all()
@@ -1004,7 +1177,7 @@ async def desactivar_beneficio(beneficio_id: int, db: AsyncSession = Depends(get
     await db.refresh(db_beneficio)
     return db_beneficio
 
-@router.get("/beneficios/estudiante/{estudiante_id}", response_model=List[BeneficioEstudianteResponse])
+@router.get("/beneficios/estudiante/{estudiante_id}", response_model=List[BeneficioEstudianteResponse], dependencies=[Depends(acceso_estudiante)])
 async def obtener_beneficios_estudiante(estudiante_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(BeneficioEstudiante).where(BeneficioEstudiante.estudiante_id == estudiante_id, BeneficioEstudiante.activo == True))
     return result.scalars().all()
