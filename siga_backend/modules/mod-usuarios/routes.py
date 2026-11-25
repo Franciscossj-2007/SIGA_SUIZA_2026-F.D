@@ -1,11 +1,13 @@
 from fastapi import APIRouter, HTTPException, Depends, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 import bcrypt
+import re
+import unicodedata
 from database import get_db, OutboxEvent
 from models import Usuario, Rol, Permiso, PerfilPersonal
 from shared.validation import ContrasenaSegura, TextoRequerido
@@ -13,6 +15,62 @@ from shared.validation import ContrasenaSegura, TextoRequerido
 
 def _hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def _slug_area(nombre: str) -> str:
+    base = unicodedata.normalize("NFKD", nombre or "area").encode("ascii", "ignore").decode("ascii")
+    base = re.sub(r"[^a-zA-Z0-9]+", "", base.lower()).strip()
+    return base or "area"
+
+
+CUENTAS_AREA = [
+    ("secretaria", "Secretaría", ["secretaria_programa"]),
+    ("docente", "Docente", ["docente"]),
+    ("tesoreria", "Tesorería", ["tesoreria"]),
+    ("admin", "Administración", ["admin"]),
+    ("coordinador", "Coordinación", ["coordinador_programa", "docente"]),
+]
+
+
+async def _asegurar_cuentas_area(db: AsyncSession, programa_nombre: str, programa_id: int | None):
+    slug = _slug_area(programa_nombre)
+    password_hash = _hash_password("123456")
+    creadas = []
+    for prefijo, etiqueta, rol_names in CUENTAS_AREA:
+        email = f"{prefijo}.{slug}@siga.edu"
+        existe = await db.execute(select(Usuario).where(Usuario.email == email))
+        if existe.scalar_one_or_none():
+            continue
+        roles_result = await db.execute(select(Rol).where(Rol.name.in_(rol_names)))
+        roles = roles_result.scalars().all()
+        db_user = Usuario(
+            email=email,
+            full_name=f"{etiqueta} - {programa_nombre}",
+            hashed_password=password_hash,
+            is_active=True,
+            is_superuser="admin" in rol_names,
+        )
+        db_user.roles = roles
+        db.add(db_user)
+        await db.flush()
+        cargo = {
+            "secretaria": "SECRETARIA_PROGRAMA",
+            "docente": "DOCENTE_AULA",
+            "tesoreria": "ADMINISTRATIVO",
+            "admin": "ADMINISTRATIVO",
+            "coordinador": "JEFE_AREA",
+        }[prefijo]
+        db.add(PerfilPersonal(
+            user_id=db_user.id,
+            condicion_laboral="NOMBRADO",
+            numero_resolucion="AUTO-AREA",
+            fecha_fin_contrato=None,
+            cargo_funcional=cargo,
+            profesion_titulo=None,
+            programa_estudio_id=programa_id,
+        ))
+        creadas.append(email)
+    return creadas
 
 router = APIRouter()
 
@@ -293,6 +351,13 @@ async def registrar_personal(personal: PersonalCreate, request: Request, db: Asy
     )
     db.add(db_perfil)
     
+    cuentas_area = []
+    if personal.cargo_funcional == "JEFE_AREA" and personal.programa_estudio_id:
+        prog_res = await db.execute(text("SELECT nombre FROM programas_estudio WHERE id = :id"), {"id": personal.programa_estudio_id})
+        prog_nombre = prog_res.scalar_one_or_none()
+        if prog_nombre:
+            cuentas_area = await _asegurar_cuentas_area(db, prog_nombre, personal.programa_estudio_id)
+
     # 3. Emitir evento
     request_id = request.headers.get("X-Request-ID", "unknown")
     event = OutboxEvent(
@@ -300,11 +365,12 @@ async def registrar_personal(personal: PersonalCreate, request: Request, db: Asy
         payload={
             "user_id": db_user.id,
             "cargo": personal.cargo_funcional,
+            "cuentas_area_creadas": cuentas_area,
             "metadata": {"request_id": request_id}
         }
     )
     db.add(event)
-    
+
     await db.commit()
     
     # Recargar data

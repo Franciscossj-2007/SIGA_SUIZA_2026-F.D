@@ -555,7 +555,7 @@ export function EnrollmentProcess({ initialStudent, onCancel }) {
                 {matricula?.cuenta_alumno && (
                   <div className="mt-4 w-full max-w-lg rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 text-center">
                     {matricula.cuenta_alumno.creada ? (
-                      <>🔑 Se creó la cuenta del alumno: usuario <b>{matricula.cuenta_alumno.usuario}</b>. La contraseña temporal debe entregarse por un canal seguro y cambiarse en el primer acceso.</>
+                      <>🔑 Se creó la cuenta del alumno: usuario <b>{matricula.cuenta_alumno.usuario}</b> · contraseña: <b>su DNI</b>.</>
                     ) : matricula.cuenta_alumno.reactivada ? (
                       <>🔑 Se reactivó la cuenta del alumno <b>{matricula.cuenta_alumno.usuario}</b> con la contraseña que ya tenía.</>
                     ) : (

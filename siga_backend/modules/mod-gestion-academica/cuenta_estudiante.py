@@ -1,8 +1,8 @@
 """Cuenta de acceso del alumno, creada al matricularlo.
 
-Regla segura:
+Regla:
 - Usuario: <DNI>@siga.edu.
-- La primera matrícula crea la cuenta con rol "estudiante" y contraseña temporal aleatoria.
+- La primera matrícula (cachimbo) crea la cuenta con rol "estudiante" y contraseña = DNI.
 - En matrículas siguientes NO se crea otra ni se cambia la contraseña: si estaba desactivada,
   se reactiva conservando la contraseña actual.
 
@@ -11,7 +11,6 @@ La ficha del alumno se enlaza con la cuenta por el correo <DNI>@siga.edu (ver se
 """
 import logging
 import re
-import secrets
 from typing import Optional
 
 import bcrypt
@@ -28,18 +27,15 @@ def correo_alumno(dni: str) -> Optional[str]:
     return f"{dni_limpio}@{DOMINIO_ALUMNOS}" if dni_limpio else None
 
 
-def _generar_contrasena_temporal() -> str:
-    return secrets.token_urlsafe(12)
-
-
 async def asegurar_cuenta_estudiante(db: AsyncSession, estudiante) -> Optional[dict]:
     """Crea o reactiva la cuenta del alumno. No hace commit: va en la misma transacción de la matrícula.
 
-    Devuelve {"usuario", "creada", "reactivada"} o None si el alumno no tiene DNI.
+    Devuelve {"usuario", "creada", "reactivada", "contrasena_inicial"} o None si el alumno no tiene DNI.
     """
     correo = correo_alumno(getattr(estudiante, "dni", None))
     if not correo:
         return None
+    dni_limpio = correo.split("@", 1)[0]
 
     fila = (await db.execute(
         text("SELECT id, is_active FROM core_users WHERE lower(email) = :c"), {"c": correo}
@@ -55,8 +51,7 @@ async def asegurar_cuenta_estudiante(db: AsyncSession, estudiante) -> Optional[d
             reactivada = True
     else:
         nombre = " ".join(p for p in [str(estudiante.nombres or "").strip(), str(estudiante.apellidos or "").strip()] if p)
-        contrasena_temporal = _generar_contrasena_temporal()
-        hashed = bcrypt.hashpw(contrasena_temporal.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        hashed = bcrypt.hashpw(dni_limpio.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
         user_id = (await db.execute(
             text("""
                 INSERT INTO core_users (email, full_name, hashed_password, is_active, is_superuser, created_at)
@@ -66,7 +61,7 @@ async def asegurar_cuenta_estudiante(db: AsyncSession, estudiante) -> Optional[d
             {"c": correo, "n": nombre or correo, "h": hashed},
         )).scalar()
         creada = True
-        logger.info("Cuenta de estudiante creada para %s; contraseña temporal generada fuera de respuesta", correo)
+        logger.info("Cuenta de estudiante creada para %s", correo)
 
     rol_id = (await db.execute(text("SELECT id FROM core_roles WHERE name = 'estudiante'"))).scalar()
     if rol_id:
@@ -87,4 +82,5 @@ async def asegurar_cuenta_estudiante(db: AsyncSession, estudiante) -> Optional[d
         "usuario": correo,
         "creada": creada,
         "reactivada": reactivada,
+        "contrasena_inicial": "su DNI" if creada else None,
     }
