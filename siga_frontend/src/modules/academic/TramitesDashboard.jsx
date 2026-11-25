@@ -30,7 +30,7 @@ export function TramitesDashboard() {
       setSolicitudes((tramites || []).map(t => ({ ...t, nombre_alumno: nombres.get(t.estudiante_id) })));
     } catch (err) {
       console.error(err);
-      setError('No se pudieron cargar los trÃ¡mites.');
+      setError('No se pudieron cargar los trámites.');
       setSolicitudes([]);
     } finally {
       setLoading(false);
@@ -52,7 +52,7 @@ export function TramitesDashboard() {
     } catch (err) {
       console.error(err);
       setSolicitudes(anterior);
-      setError('No se pudo actualizar el estado del trÃ¡mite.');
+      setError('No se pudo actualizar el estado del trámite.');
     }
   };
 
@@ -82,15 +82,15 @@ export function TramitesDashboard() {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center">
         <div>
           <h3 className="text-3xl font-bold tracking-tight text-slate-text">
-            GestiÃ³n de <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-500 to-orange-500">TrÃ¡mites y CasuÃ­sticas</span>
+            Gestión de <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-500 to-orange-500">Trámites y Casuísticas</span>
           </h3>
-          <p className="text-slate-500 text-sm mt-1">AdministraciÃ³n TUPA, Convalidaciones, Becas y Resoluciones</p>
+          <p className="text-slate-500 text-sm mt-1">Administración TUPA, Convalidaciones, Becas y Resoluciones</p>
         </div>
       </div>
 
       <div className="w-full">
         <div className="flex border-b-0 space-x-1">
-          {renderTabHeader('solicitudes', 'TrÃ¡mites y Solicitudes', <FileText size={16} />)}
+          {renderTabHeader('solicitudes', 'Trámites y Solicitudes', <FileText size={16} />)}
           {renderTabHeader('convalidaciones', 'Convalidaciones', <Repeat size={16} />)}
           {renderTabHeader('becas', 'Becas y Beneficios', <GraduationCap size={16} />)}
         </div>
@@ -119,7 +119,7 @@ export function TramitesDashboard() {
                     <tr>
                       <th className="py-3 px-4 font-bold text-slate-600">ID / Fecha</th>
                       <th className="py-3 px-4 font-bold text-slate-600">Estudiante</th>
-                      <th className="py-3 px-4 font-bold text-slate-600">Tipo de TrÃ¡mite</th>
+                      <th className="py-3 px-4 font-bold text-slate-600">Tipo de Trámite</th>
                       <th className="py-3 px-4 font-bold text-slate-600">Estado</th>
                       <th className="py-3 px-4 font-bold text-slate-600 text-right">Acciones</th>
                     </tr>

@@ -14,7 +14,7 @@ const TIPOS = [
   { id: 'Historico', tone: 'bg-purple-100 text-purple-700 border-purple-200', icon: 'ðŸ“œ' },
 ];
 
-/** SecciÃ³n 2 del diagrama â€” Tipos de alumnos histÃ³ricos. */
+/** Sección 2 del diagrama — Tipos de alumnos históricos. */
 export function TiposAlumnosPanel() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -96,11 +96,11 @@ export function TiposAlumnosPanel() {
         title="2. Tipos de alumnos"
         description={
           <>
-            Clasifica a los estudiantes segÃºn su condiciÃ³n de ingreso y permanencia dentro del proceso
-            de matrÃ­cula acadÃ©mica: <b>Ingresante</b>, <b>Invicto</b>, <b>Jalado</b> e <b>HistÃ³rico</b>.
+            Clasifica a los estudiantes según su condición de ingreso y permanencia dentro del proceso
+            de matrícula académica: <b>Ingresante</b>, <b>Invicto</b>, <b>Jalado</b> e <b>Histórico</b>.
           </>
         }
-        chips={['Ingresante', 'Invicto', 'Jalado', 'HistÃ³rico']}
+        chips={['Ingresante', 'Invicto', 'Jalado', 'Histórico']}
       />
 
       {/* Tarjetas de resumen */}
@@ -130,7 +130,7 @@ export function TiposAlumnosPanel() {
         <input
           type="text"
           className="flex-1 min-w-[200px] bg-transparent border-none focus:ring-0 py-2 text-slate-700 placeholder-slate-400 outline-none"
-          placeholder="Buscar por DNI, Nombre o CÃ³digo..."
+          placeholder="Buscar por DNI, Nombre o Código..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -168,8 +168,8 @@ export function TiposAlumnosPanel() {
         <div className="p-3 rounded-xl bg-amber-50 text-amber-700 border border-amber-100 text-xs flex flex-wrap items-center gap-3">
           <span className="flex-1 min-w-[240px]">
             â„¹ï¸ {carreraSinPlan
-              ? <><b>{carreraSinPlan.nombre}</b> no tiene un <b>plan de estudios vigente</b>, asÃ­ que en esa carrera la detecciÃ³n de alumnos <b>HistÃ³rico</b> estÃ¡ desactivada hasta que se registre uno.</>
-              : <>Sin <b>plan de estudios vigente</b>: <b>{carrerasSinPlan.map((p) => p.nombre).join(', ')}</b>. En esas carreras la detecciÃ³n de alumnos <b>HistÃ³rico</b> estÃ¡ desactivada.</>}
+              ? <><b>{carreraSinPlan.nombre}</b> no tiene un <b>plan de estudios vigente</b>, así que en esa carrera la detección de alumnos <b>Histórico</b> está desactivada hasta que se registre uno.</>
+              : <>Sin <b>plan de estudios vigente</b>: <b>{carrerasSinPlan.map((p) => p.nombre).join(', ')}</b>. En esas carreras la detección de alumnos <b>Histórico</b> está desactivada.</>}
           </span>
           {puedeRegistrarPlan && (
             <button
@@ -198,7 +198,7 @@ export function TiposAlumnosPanel() {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-slate-200">
-                <th className="py-3 px-4 text-xs font-bold text-slate-400 uppercase tracking-wider">CÃ³digo</th>
+                <th className="py-3 px-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Código</th>
                 <th className="py-3 px-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Estudiante</th>
                 <th className="py-3 px-4 text-xs font-bold text-slate-400 uppercase tracking-wider">DNI</th>
                 <th className="py-3 px-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Tipo</th>
@@ -244,7 +244,7 @@ export function TiposAlumnosPanel() {
                           {e.unidades_a_cargo.length}
                         </span>
                       ) : (
-                        <span className="text-slate-300">â€”</span>
+                        <span className="text-slate-300">—</span>
                       )}
                     </td>
                     <td className="py-3 px-4 text-slate-600">{e.ciclo_actual}</td>

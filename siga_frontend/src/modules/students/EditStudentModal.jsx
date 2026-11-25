@@ -381,7 +381,7 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
       onClose();
     } catch (err) {
       console.error(err);
-      setError("Error de conexiÃ³n al actualizar los datos personales.");
+      setError("Error de conexión al actualizar los datos personales.");
       setShowConfirmModal(false);
     } finally {
       setLoading(false);
@@ -410,7 +410,7 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
               <div className="min-w-0">
                 <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-400/20 border border-amber-300/30 text-amber-200 text-[10px] font-black uppercase tracking-wider mb-0.5">
                   <ShieldCheck size={12} />
-                  <span>EdiciÃ³n de Datos Personales</span>
+                  <span>Edición de Datos Personales</span>
                 </div>
                 <h3 className="text-base sm:text-lg font-black text-white truncate">
                   {student.nombres} {student.apellidos}
@@ -434,35 +434,35 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
             <div className="bg-rose-50 border-2 border-rose-200 text-rose-900 p-4 rounded-2xl text-xs font-bold flex items-start gap-2.5 shadow-xs">
               <AlertTriangle size={16} className="text-rose-600 shrink-0 mt-0.5" />
               <div className="flex-1">
-                <p className="font-black text-rose-950">No se pudo guardar la modificaciÃ³n</p>
+                <p className="font-black text-rose-950">No se pudo guardar la modificación</p>
                 <p className="mt-0.5 text-rose-800">{error}</p>
               </div>
             </div>
           )}
 
-          {/* Banner explicativo de alcance de ediciÃ³n */}
+          {/* Banner explicativo de alcance de edición */}
           <div className="bg-blue-50/80 border-2 border-blue-200 p-4 rounded-2xl text-xs text-blue-900 flex items-start gap-3 shadow-xs">
             <ShieldAlert size={18} className="text-primary shrink-0 mt-0.5" />
             <div className="leading-relaxed font-semibold">
-              <strong className="text-primary-dark font-black">Ãmbito de EdiciÃ³n:</strong> Solo se permite modificar datos personales de contacto, identidad y domicilio del estudiante (correcciÃ³n de errores tipogrÃ¡ficos). La carrera, el cÃ³digo de estudiante y el estado de matrÃ­cula son inmutables para preservar la trazabilidad institucional.
+              <strong className="text-primary-dark font-black">Ámbito de Edición:</strong> Solo se permite modificar datos personales de contacto, identidad y domicilio del estudiante (corrección de errores tipográficos). La carrera, el código de estudiante y el estado de matrícula son inmutables para preservar la trazabilidad institucional.
             </div>
           </div>
 
           <form id="edit-student-personal-form" onSubmit={handlePreSubmit} className="space-y-6">
 
-            {/* Bloque 1: Datos AcadÃ©micos (SOLO LECTURA) */}
+            {/* Bloque 1: Datos Académicos (SOLO LECTURA) */}
             <div className="bg-white border-2 border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
               <SectionHeader icon={GraduationCap} title="Datos Institucionales Asignados" subtitle="Campos protegidos no editables" />
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
-                <EditField label="CÃ³digo de Estudiante" value={student.codigo_estudiante} readOnly icon={Lock} />
+                <EditField label="Código de Estudiante" value={student.codigo_estudiante} readOnly icon={Lock} />
                 <EditField label="Programa de Estudios" value={carreraNombre} readOnly icon={Lock} />
-                <EditField label="Estado AcadÃ©mico" value={student.estado_academico || 'postulante'} readOnly icon={Lock} />
+                <EditField label="Estado Académico" value={student.estado_academico || 'postulante'} readOnly icon={Lock} />
               </div>
             </div>
 
             {/* Bloque 2: Identidad Personal (EDITABLE) */}
             <div className="bg-white border-2 border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-              <SectionHeader icon={User} title="Identidad del Estudiante" subtitle="CorrecciÃ³n de nombres, apellidos y documento" />
+              <SectionHeader icon={User} title="Identidad del Estudiante" subtitle="Corrección de nombres, apellidos y documento" />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <EditField
                   label="Nombres"
@@ -485,7 +485,7 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
                   required
                   onlyDigits
                   maxLength={8}
-                  placeholder="8 dÃ­gitos"
+                  placeholder="8 dígitos"
                 />
                 <EditField
                   label="Fecha de Nacimiento"
@@ -495,7 +495,7 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
                   icon={Calendar}
                 />
                 <EditField
-                  label="GÃ©nero / Sexo"
+                  label="Género / Sexo"
                   value={form.genero}
                   onChange={val => handleChange('genero', val)}
                   options={['Masculino', 'Femenino', 'Otro']}
@@ -519,16 +519,16 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
 
             {/* Bloque 3: Contacto y Residencia (EDITABLE) */}
             <div className="bg-white border-2 border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
-              <SectionHeader icon={MapPin} title="Contacto y Domicilio" subtitle="VÃ­as de comunicaciÃ³n y residencia actual" />
+              <SectionHeader icon={MapPin} title="Contacto y Domicilio" subtitle="Vías de comunicación y residencia actual" />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <EditField
-                  label="TelÃ©fono MÃ³vil / Celular"
+                  label="Teléfono Móvil / Celular"
                   value={form.celular}
                   onChange={val => handleChange('celular', val)}
                   icon={Phone}
                   onlyDigits
                   maxLength={9}
-                  placeholder="9 dÃ­gitos"
+                  placeholder="9 dígitos"
                 />
                 <EditField
                   label="Email Personal"
@@ -541,10 +541,10 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
 
                 <div className="sm:col-span-2">
                   <EditField
-                    label="DirecciÃ³n de Domicilio"
+                    label="Dirección de Domicilio"
                     value={form.direccion_domicilio}
                     onChange={val => handleChange('direccion_domicilio', val)}
-                    placeholder="Calle, Jr., Av., NÂ° y urbanizaciÃ³n"
+                    placeholder="Calle, Jr., Av., N° y urbanización"
                   />
                 </div>
 
@@ -595,13 +595,13 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
                   placeholder="Nombre de apoderado o familiar"
                 />
                 <EditField
-                  label="TelÃ©fono de Emergencia"
+                  label="Teléfono de Emergencia"
                   value={form.contacto_emergencia_telefono}
                   onChange={val => handleChange('contacto_emergencia_telefono', val)}
                   icon={Phone}
                   onlyDigits
                   maxLength={9}
-                  placeholder="9 dÃ­gitos"
+                  placeholder="9 dígitos"
                 />
               </div>
             </div>
@@ -612,7 +612,7 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
         {/* Pie del modal con acciones */}
         <div className="bg-slate-100 px-5 sm:px-7 py-4 border-t-2 border-slate-200 flex flex-col-reverse sm:flex-row items-center justify-between gap-3 shrink-0">
           <p className="text-[11px] font-bold text-slate-500 text-center sm:text-left">
-            Presione Guardar Cambios para confirmar la actualizaciÃ³n.
+            Presione Guardar Cambios para confirmar la actualización.
           </p>
 
           <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
@@ -636,7 +636,7 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
           </div>
         </div>
 
-        {/* Modal Centrado de ConfirmaciÃ³n */}
+        {/* Modal Centrado de Confirmación */}
         {showConfirmModal && (
           <div className="absolute inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in">
             <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-md w-full shadow-2xl border-2 border-slate-200 text-center animate-scale-up">
@@ -645,11 +645,11 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
               </div>
 
               <h4 className="text-lg font-black text-slate-900 mb-2">
-                Confirmar ModificaciÃ³n
+                Confirmar Modificación
               </h4>
 
               <p className="text-sm font-semibold text-slate-600 mb-6 leading-relaxed">
-                Â¿EstÃ¡ seguro de cambiar los datos personales del estudiante{' '}
+                ¿Está seguro de cambiar los datos personales del estudiante{' '}
                 <strong className="text-slate-950 font-black block mt-1 text-base">
                   "{student.nombres} {student.apellidos}"
                 </strong>
@@ -678,7 +678,7 @@ export function EditStudentModal({ student, onClose, onUpdated }) {
                   ) : (
                     <>
                       <Check size={16} />
-                      <span>SÃ­, Confirmar</span>
+                      <span>Sí, Confirmar</span>
                     </>
                   )}
                 </button>
