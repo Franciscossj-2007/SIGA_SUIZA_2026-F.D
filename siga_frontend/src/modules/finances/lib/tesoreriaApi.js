@@ -1,29 +1,35 @@
 // Cliente de la API de Tesorería (mod-gestion-academica /tesoreria). La base de datos es la fuente de verdad.
-import { API_BASE } from '../../../core/api/client';
+import { API_BASE, apiClient } from '../../../core/api/client';
 
 const BASE = `${API_BASE}/api/mod-gestion-academica/tesoreria`;
 
-async function request(path, { method = 'GET', body, signal } = {}) {
+async function request(path, { method = 'GET', body } = {}) {
   const res = await fetch(`${BASE}${path}`, {
     method,
-    signal,
     headers: {
       Authorization: `Bearer ${localStorage.getItem('token')}`,
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  let data;
+  // Sesión vencida (el token dura 30 min): igual que el resto del sistema, se cierra la
+  // sesión y se vuelve al inicio de sesión, en vez de dejar Caja con "Token inválido".
+  if (res.status === 401) {
+    apiClient.clearToken();
+    window.location.reload();
+    throw new Error('Tu sesión expiró. Vuelve a iniciar sesión.');
+  }
+  let data = null;
   try {
     data = await res.json();
   } catch {
-    data = null;
+    // keep null
   }
   if (!res.ok) {
-    const detail = typeof data?.detail === 'string' ? data.detail : null;
+    const detail = data && typeof data.detail === 'string' ? data.detail : null;
     throw new Error(detail || `Error ${res.status} en Tesorería`);
   }
-  return data;
+  return data == null ? {} : data;
 }
 
 // Payload del formulario de conceptos → API
@@ -51,7 +57,7 @@ export const tesoreriaApi = {
 
   listarPagos: () => request('/pagos'),
   registrarPago: (payload) => request('/pagos', { method: 'POST', body: payload }),
-  estadoCuenta: (estudianteId, signal) => request(`/estudiantes/${estudianteId}/estado-cuenta`, { signal }),
+  estadoCuenta: (estudianteId) => request(`/estudiantes/${estudianteId}/estado-cuenta`),
 
   importar: (payload) => request('/importar', { method: 'POST', body: payload }),
 };
@@ -117,8 +123,8 @@ export function isPublicUrl(url) {
   return host.includes('.');
 }
 
-// API base para la página pública: en Vercel no existe el proxy /api de nginx,
-// por lo que se usa la URL del backend (VITE_API_URL) cuando está definida.
+// API base para la página pública: ruta relativa, servida por el proxy /api del propio frontend
+// (Vite en desarrollo, nginx en producción). Así el celular solo necesita llegar a la web del sistema.
 export function publicApiBase() {
-  return import.meta.env.VITE_API_URL || '';
+  return '';
 }

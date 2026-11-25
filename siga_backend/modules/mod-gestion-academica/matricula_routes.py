@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from seguridad import acceso_estudiante, solo_padron, solo_personal
 from pydantic import BaseModel
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,9 +38,9 @@ from domain import (
     es_periodo_inicio_anio,
 )
 from enrollment_engine import construir_propuesta, evaluar_ventana_matricula
-from programas_catalog import es_programa_valido, normalizar_texto, resolver_programa_id
+from cuenta_estudiante import asegurar_cuenta_estudiante
 from enrollment_service import cargar_historial, construir_contexto
-from intermodule import fetch_cargaLectiva, fetch_malla, fetch_programa, fetch_periodo
+from intermodule import fetch_cargaLectiva, fetch_malla, fetch_programa, fetch_programas, fetch_periodo
 from models import (
     BeneficioEstudiante,
     ConvalidacionDetalle,
@@ -111,24 +112,21 @@ async def _tiene_matricula_vigente(db, estudiante_id, periodo_id) -> bool:
 # Sección 1 — Admisión: Excel/JSON + matrícula automática de Ciclo I + ficha
 # ---------------------------------------------------------------------------
 
-CODIGOS_PRUEBA = {"439"}
-
 _MAP_COLUMNAS = {
-    "codigo": ["codigo", "código"],
     "dni": ["dni", "nro de documento", "numero de documento", "n° de documento", "documento"],
     "nombres": ["nombres", "nombre", "nombres completos"],
     "apellido_paterno": ["apellido paterno", "paterno", "primer apellido"],
     "apellido_materno": ["apellido materno", "materno", "segundo apellido"],
     "apellidos": ["apellidos"],
-    "programa_id": ["programa_id", "id_programa", "programa id", "programa de estudios", "programa"],
-    "celular": ["celular", "telefono", "celular:"],
-    "email_personal": ["email_personal", "correo", "email"],
-    "modalidad": ["modalidad", "modalidad_admision", "modalidad de admision"],
+    "programa_id": ["programa_id", "id_programa", "programa id"],
+    "celular": ["celular", "telefono", "teléfono", "celular:"],
+    "email_personal": ["email_personal", "correo", "correo:", "email"],
+    "modalidad": ["modalidad", "modalidad_admision", "modalidad de admisión"],
 }
 
 
 def _normaliza_header(header: str) -> str:
-    return normalizar_texto(header).rstrip(":")
+    return str(header).strip().lower().replace("  ", " ")
 
 
 def _resolver_columnas(df_columns):
@@ -136,14 +134,10 @@ def _resolver_columnas(df_columns):
     normalizadas = {_normaliza_header(c): c for c in df_columns}
     resuelto = {}
     for campo, alias in _MAP_COLUMNAS.items():
-        for nombre in alias:
-            if nombre in normalizadas:
-                resuelto[campo] = normalizadas[nombre]
+        for a in alias:
+            if a in normalizadas:
+                resuelto[campo] = normalizadas[a]
                 break
-    if "dni" not in resuelto:
-        raise ValueError(
-            "El Excel debe incluir una columna de DNI (p. ej. 'DNI' o 'NRO DE DOCUMENTO')."
-        )
     return resuelto
 
 
@@ -153,104 +147,44 @@ def _limpiar(valor):
     if isinstance(valor, float) and pd.isna(valor):
         return None
     texto = str(valor).strip()
-    if texto.lower() in ("", "nan", "none", "nat"):
+    if texto.lower() in ("", "nan", "none"):
         return None
-    return texto[:-2] if texto.endswith(".0") else texto
+    return texto.replace(".0", "") if texto.endswith(".0") else texto
 
 
-def _digitos(valor):
-    texto = _limpiar(valor)
-    if texto is None:
-        return None
-    return "".join(caracter for caracter in texto if caracter.isdigit()) or None
-
-
-def _validar_registro(registro, numero, errores):
-    if not (5 <= len(registro["dni"]) <= 12):
-        errores.append(f"Fila {numero}: DNI inválido {registro['dni']!r}.")
-        return False
-    if not registro["nombres"] or not registro["apellidos"]:
-        errores.append(f"Fila {numero}: nombres y apellidos son obligatorios.")
-        return False
-    if registro["programa_id"] is not None:
-        programa_id = resolver_programa_id(registro["programa_id"])
-        if programa_id is None:
-            errores.append(
-                f"Fila {numero}: programa no reconocido {registro['programa_id']!r}."
-            )
-            return False
-        registro["programa_id"] = programa_id
-    return True
-
-
-def _procesar_hoja(df, cols, hoja, modalidad_default, dnis_vistos, registros, errores):
-    for numero, (_, fila) in enumerate(df.iterrows(), start=2):
-        dni = _digitos(fila.get(cols["dni"]))
-        if not dni:
-            continue
-        etiqueta = f"{numero} ({hoja})"
-        codigo = _limpiar(fila.get(cols["codigo"])) if cols.get("codigo") else None
-        if codigo in CODIGOS_PRUEBA:
-            errores.append(f"Fila {etiqueta}: fila de prueba descartada (código {codigo}).")
-            continue
-        if dni in dnis_vistos:
-            errores.append(f"Fila {etiqueta}: DNI duplicado {dni}.")
-            continue
-        apellidos = _limpiar(fila.get(cols["apellidos"])) if cols.get("apellidos") else None
-        if not apellidos:
-            paterno = _limpiar(fila.get(cols.get("apellido_paterno"))) or ""
-            materno = _limpiar(fila.get(cols.get("apellido_materno"))) or ""
-            apellidos = f"{paterno} {materno}".strip() or None
-        registro = {
-            "dni": dni,
-            "nombres": _limpiar(fila.get(cols["nombres"])) if cols.get("nombres") else None,
-            "apellidos": apellidos,
-            "programa_id": _limpiar(fila.get(cols["programa_id"])) if cols.get("programa_id") else None,
-            "celular": _digitos(fila.get(cols["celular"])) if cols.get("celular") else None,
-            "email_personal": _limpiar(fila.get(cols["email_personal"])) if cols.get("email_personal") else None,
-            "modalidad": (_limpiar(fila.get(cols["modalidad"])) if cols.get("modalidad") else None) or modalidad_default,
-        }
-        if _validar_registro(registro, etiqueta, errores):
-            dnis_vistos.add(dni)
-            registros.append(registro)
-
-
-def parse_excel_ingresantes(contenido: bytes) -> tuple[List[dict], List[str]]:
+def parse_excel_ingresantes(contenido: bytes) -> List[dict]:
     excel = pd.ExcelFile(BytesIO(contenido))
-    hojas = {normalizar_texto(nombre): nombre for nombre in excel.sheet_names}
-    hoja = hojas.get("b_datos")
-    if hoja is None:
-        raise ValueError(
-            "El Excel debe contener una hoja 'B_Datos'. "
-            f"Hojas encontradas: {excel.sheet_names}"
-        )
-
+    hoja = excel.sheet_names[0]
     df = pd.read_excel(excel, sheet_name=hoja)
     cols = _resolver_columnas(df.columns)
-
-    registros = []
-    errores = []
-    dnis_vistos = set()
-    _procesar_hoja(df, cols, hoja, "ORDINARIO", dnis_vistos, registros, errores)
-
-    hoja_exonerados = hojas.get("b_datos_exonerados")
-    if hoja_exonerados:
-        df_exonerados = pd.read_excel(excel, sheet_name=hoja_exonerados)
-        cols_exonerados = _resolver_columnas(df_exonerados.columns)
-        _procesar_hoja(
-            df_exonerados,
-            cols_exonerados,
-            hoja_exonerados,
-            "EXONERADO",
-            dnis_vistos,
-            registros,
-            errores,
+    if "dni" not in cols:
+        raise ValueError(
+            "El Excel debe incluir una columna de DNI (p. ej. 'DNI' o 'NRO DE DOCUMENTO')."
         )
 
-    return registros, errores
+    registros = []
+    for _, fila in df.iterrows():
+        dni = _limpiar(fila.get(cols["dni"]))
+        if not dni:
+            continue
+        apellidos = _limpiar(fila.get(cols.get("apellidos"))) if cols.get("apellidos") else None
+        if not apellidos:
+            paterno = _limpiar(fila.get(cols.get("apellido_paterno"))) if cols.get("apellido_paterno") else ""
+            materno = _limpiar(fila.get(cols.get("apellido_materno"))) if cols.get("apellido_materno") else ""
+            apellidos = f"{paterno or ''} {materno or ''}".strip() or None
+        registros.append({
+            "dni": dni,
+            "nombres": _limpiar(fila.get(cols.get("nombres"))) if cols.get("nombres") else "SIN NOMBRES",
+            "apellidos": apellidos or "SIN APELLIDOS",
+            "programa_id": _limpiar(fila.get(cols.get("programa_id"))) if cols.get("programa_id") else None,
+            "celular": _limpiar(fila.get(cols.get("celular"))) if cols.get("celular") else None,
+            "email_personal": _limpiar(fila.get(cols.get("email_personal"))) if cols.get("email_personal") else None,
+            "modalidad": (_limpiar(fila.get(cols.get("modalidad"))) if cols.get("modalidad") else None) or "ORDINARIO",
+        })
+    return registros
 
 
-def parse_json_ingresantes(contenido: bytes) -> tuple[List[dict], List[str]]:
+def parse_json_ingresantes(contenido: bytes) -> List[dict]:
     """Parsea una relación de ingresantes en JSON (lista o ``{"admitidos": [...]}``)."""
     try:
         data = json.loads(contenido.decode("utf-8-sig"))
@@ -263,11 +197,10 @@ def parse_json_ingresantes(contenido: bytes) -> tuple[List[dict], List[str]]:
         raise ValueError("El JSON debe ser una lista de ingresantes o un objeto con la clave 'admitidos'.")
 
     registros = []
-    errores = []
-    for numero, item in enumerate(data, start=1):
+    for item in data:
         if not isinstance(item, dict):
             continue
-        dni = _digitos(item.get("dni") or item.get("nro de documento") or item.get("numero de documento"))
+        dni = _limpiar(item.get("dni") or item.get("nro de documento") or item.get("numero de documento"))
         if not dni:
             continue
         apellidos = _limpiar(item.get("apellidos"))
@@ -276,18 +209,16 @@ def parse_json_ingresantes(contenido: bytes) -> tuple[List[dict], List[str]]:
                 _limpiar(item.get("apellido_paterno") or item.get("paterno")),
                 _limpiar(item.get("apellido_materno") or item.get("materno")),
             ])).strip() or None
-        registro = {
+        registros.append({
             "dni": dni,
-            "nombres": _limpiar(item.get("nombres") or item.get("nombre")),
-            "apellidos": apellidos,
+            "nombres": _limpiar(item.get("nombres") or item.get("nombre")) or "SIN NOMBRES",
+            "apellidos": apellidos or "SIN APELLIDOS",
             "programa_id": _limpiar(item.get("programa_id") or item.get("id_programa")),
-            "celular": _digitos(item.get("celular") or item.get("telefono")),
+            "celular": _limpiar(item.get("celular") or item.get("telefono")),
             "email_personal": _limpiar(item.get("email_personal") or item.get("correo")),
             "modalidad": _limpiar(item.get("modalidad") or item.get("modalidad_admision")) or "ORDINARIO",
-        }
-        if _validar_registro(registro, numero, errores):
-            registros.append(registro)
-    return registros, errores
+        })
+    return registros
 
 
 class MatricularIngresantesRequest(BaseModel):
@@ -317,24 +248,15 @@ async def admision_excel(
         raise HTTPException(status_code=400, detail="El archivo debe ser .xlsx, .xls o .json")
     contenido = await file.read()
     try:
-        registros, errores_validacion = (
+        registros = (
             parse_json_ingresantes(contenido) if nombre.endswith(".json")
             else parse_excel_ingresantes(contenido)
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    if programa_id is not None and not es_programa_valido(programa_id):
-        raise HTTPException(status_code=400, detail="El programa seleccionado no es válido.")
-
     if not registros:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "No se encontraron ingresantes válidos con DNI en el archivo.",
-                "errores": errores_validacion,
-            },
-        )
+        raise HTTPException(status_code=400, detail="No se encontraron ingresantes con DNI en el archivo.")
 
     periodo_info = await fetch_periodo(periodo_id)
     codigo_periodo = periodo_info.get("codigo") if periodo_info else f"ID {periodo_id}"
@@ -366,7 +288,6 @@ async def admision_excel(
             "periodo_codigo": codigo_periodo,
             "es_periodo_inicio": es_inicio,
             "advertencia": advertencia,
-            "errores": errores_validacion,
         }
 
     creados, existentes = 0, 0
@@ -377,12 +298,11 @@ async def admision_excel(
             existentes += 1
             continue
         prog = reg["programa_id"] or programa_id
-        prog_id = resolver_programa_id(prog)
-        if prog_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Ingresante con DNI {reg['dni']}: seleccione un programa de estudio válido (1..11).",
-            )
+        try:
+            prog_id = int(prog) if prog else None
+        except (TypeError, ValueError):
+            prog = str(prog).strip()
+            prog_id = int(prog) if prog.isdigit() else programa_id
         codigo = f"{datetime.now().year}-{reg['dni']}"
         estudiante = Estudiante(
             codigo_estudiante=codigo,
@@ -435,7 +355,6 @@ async def admision_excel(
         "estudiante_ids": ids_creados,
         "matricula": matricula_resultado,
         "es_periodo_inicio": es_inicio,
-        "errores": errores_validacion,
     }
 
 
@@ -462,7 +381,7 @@ async def matricular_ingresantes(
     query = select(Estudiante)
     if payload.estudiante_ids:
         query = query.where(Estudiante.id.in_(payload.estudiante_ids))
-    elif payload.programa_id:
+    if payload.programa_id:
         query = query.where(Estudiante.programa_id == payload.programa_id)
     estudiantes = (await db.execute(query)).scalars().all()
 
@@ -510,6 +429,8 @@ async def matricular_ingresantes(
             ))
         est.estado_academico = "matriculado"
         est.ciclo_actual = propuesta.ciclo_sugerido
+        # Cuenta del cachimbo: usuario DNI@siga.edu, contraseña su DNI (o se reactiva si ya existía)
+        await asegurar_cuenta_estudiante(db, est)
 
         publicar(db, "gestion_academica.matricula.confirmada", {
             "matricula_id": matricula.id, "estudiante_id": est.id,
@@ -535,7 +456,7 @@ async def matricular_ingresantes(
     }
 
 
-@router.get("/estudiantes/{estudiante_id}/ficha")
+@router.get("/estudiantes/{estudiante_id}/ficha", dependencies=[Depends(acceso_estudiante)])
 async def obtener_ficha(estudiante_id: int, db: AsyncSession = Depends(get_db)):
     """Ficha del estudiante (sección 1: "se genera la ficha")."""
     estudiante = (await db.execute(
@@ -579,7 +500,7 @@ async def obtener_ficha(estudiante_id: int, db: AsyncSession = Depends(get_db)):
 # Secciones 2, 3 y 5 — Motor: propuesta (ciclo, cursos, restricciones)
 # ---------------------------------------------------------------------------
 
-@router.get("/matriculas/propuesta")
+@router.get("/matriculas/propuesta", dependencies=[Depends(solo_personal)])
 async def propuesta_matricula(
     estudiante_id: int,
     programa_id: int,
@@ -615,7 +536,7 @@ async def propuesta_matricula(
 # Restricciones — Validación de créditos y reglas académicas
 # ---------------------------------------------------------------------------
 
-@router.get("/matriculas/restricciones")
+@router.get("/matriculas/restricciones", dependencies=[Depends(solo_personal)])
 async def restricciones_matricula(
     estudiante_id: int,
     programa_id: int,
@@ -707,7 +628,7 @@ async def restricciones_matricula(
 # Sección 2 — Tipos de alumnos históricos (invicto / jalado / histórico)
 # ---------------------------------------------------------------------------
 
-@router.get("/matriculas/tipos-alumnos")
+@router.get("/matriculas/tipos-alumnos", dependencies=[Depends(solo_padron)])
 async def tipos_alumnos(
     programa_id: Optional[int] = None,
     tipo: Optional[str] = None,
@@ -725,12 +646,20 @@ async def tipos_alumnos(
         await db.execute(stmt.order_by(Estudiante.apellidos, Estudiante.nombres))
     ).scalars().all()
 
-    # Plan vigente del programa (para detectar alumnos "históricos").
+    # Plan vigente de cada carrera (para detectar alumnos "históricos"). Antes solo se buscaba
+    # cuando llegaba programa_id; la pantalla no lo envía, así que la detección quedaba apagada
+    # y el aviso "sin plan vigente" salía en todas las carreras.
     plan_vigente = None
+    plan_por_programa: Dict[int, Optional[int]] = {}
     if programa_id:
         programa = await fetch_programa(programa_id)
         if isinstance(programa, dict):
             plan_vigente = programa.get("plan_estudio_id")
+        plan_por_programa[programa_id] = plan_vigente
+    else:
+        for p in await fetch_programas():
+            if isinstance(p, dict) and p.get("id") is not None:
+                plan_por_programa[p["id"]] = p.get("plan_estudio_id")
 
     # Unidades convalidadas (aprobadas) por estudiante.
     convalidados_por_est: Dict[int, set] = {}
@@ -767,7 +696,8 @@ async def tipos_alumnos(
         for uid in conv:
             hist[uid] = EstadoCurso.CONVALIDADO.value
         plan_origen = getattr(e, "plan_estudios_id", None)
-        es_historico = bool(plan_origen and plan_vigente and plan_origen != plan_vigente)
+        plan_carrera = plan_por_programa.get(e.programa_id) if e.programa_id else None
+        es_historico = bool(plan_origen and plan_carrera and plan_origen != plan_carrera)
         clasificacion = clasificar_tipo_alumno(hist, conv, es_historico)
         resumen[clasificacion] = resumen.get(clasificacion, 0) + 1
         if filtro and filtro != clasificacion.lower():
@@ -784,7 +714,7 @@ async def tipos_alumnos(
             "tipo_alumno": clasificacion,
             "es_historico": es_historico,
             "plan_origen": plan_origen,
-            "plan_vigente": plan_vigente,
+            "plan_vigente": plan_carrera,
             "total_en_historial": len(hist),
             "aprobadas": sum(1 for s in hist.values() if s == EstadoCurso.APROBADO.value),
             "desaprobadas": sum(1 for s in hist.values() if s == EstadoCurso.DESAPROBADO.value),
@@ -918,7 +848,7 @@ def _boleta_payload(matricula: Matricula) -> dict:
     }
 
 
-@router.get("/matriculas/boletas")
+@router.get("/matriculas/boletas", dependencies=[Depends(solo_personal)])
 async def listar_boletas(
     periodo_id: Optional[int] = None,
     programa_id: Optional[int] = None,
@@ -986,7 +916,7 @@ async def listar_boletas(
     }
 
 
-@router.get("/boletas/validar/{codigo}")
+@router.get("/boletas/validar/{codigo}", dependencies=[Depends(solo_personal)])
 async def validar_boleta(codigo: str, db: AsyncSession = Depends(get_db)):
     """Validación pública por escaneo del QR (alumno / secretaría)."""
     result = await db.execute(
@@ -1070,7 +1000,7 @@ async def consolidar_matricula(matricula_id: int, request: Request, db: AsyncSes
     return {"matricula_id": matricula.id, "pasos": pasos}
 
 
-@router.get("/matriculas/resultado")
+@router.get("/matriculas/resultado", dependencies=[Depends(solo_personal)])
 async def resultado_final(
     periodo_id: Optional[int] = None,
     programa_id: Optional[int] = None,
@@ -1141,7 +1071,7 @@ async def resultado_final(
 # Sección 8 — Historial académico y avance de créditos
 # ---------------------------------------------------------------------------
 
-@router.get("/estudiantes/{estudiante_id}/historial")
+@router.get("/estudiantes/{estudiante_id}/historial", dependencies=[Depends(acceso_estudiante)])
 async def historial_estudiante(estudiante_id: int, db: AsyncSession = Depends(get_db)):
     """Historial académico: matrículas + estados institucionales."""
     mats = (await db.execute(
@@ -1263,7 +1193,7 @@ async def _calcular_avance(db: AsyncSession, estudiante_id: int, programa_id: in
     }
 
 
-@router.get("/estudiantes/{estudiante_id}/avance")
+@router.get("/estudiantes/{estudiante_id}/avance", dependencies=[Depends(acceso_estudiante)])
 async def avance_estudiante(estudiante_id: int, programa_id: Optional[int] = None, db: AsyncSession = Depends(get_db)):
     """Avance de créditos y ciclo actual del estudiante (sección 8)."""
     est = (await db.execute(

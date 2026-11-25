@@ -1,11 +1,12 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+﻿import { useState, useEffect, useMemo } from 'react';
 import {
   UserPlus, UserCog, QrCode, Scale, HeartHandshake,
   ShieldAlert, Trophy, Users, FolderOpen, PlusCircle, GraduationCap,
 } from 'lucide-react';
 import { API_BASE } from '../../core/api/client';
-import { PROGRAMAS } from '../../core/catalog/programas';
+import { usePrograms } from '../../core/api/usePrograms';
 import { useAuth } from '../../core/auth/useAuth';
+import { filtrarEstudiantes } from '../../core/studentSearch';
 import { EnrollmentProcess } from './EnrollmentProcess';
 import { EnrollmentFlowDiagram } from './EnrollmentFlowDiagram';
 import { AdmissionPanel } from './AdmissionPanel';
@@ -21,6 +22,7 @@ import './enrollmentPremium.css';
 
 export function EnrollmentDashboard() {
   const { user } = useAuth();
+  const programas = usePrograms();
   const userRoles = user?.roles ? user.roles.map(r => typeof r === 'string' ? r : r.nombre || r.name) : [];
   const primaryRole = user?.is_superuser ? 'superadmin' : (userRoles.length > 0 ? userRoles[0] : (user?.role || 'invitado'));
   const userRole = primaryRole;
@@ -31,80 +33,80 @@ export function EnrollmentDashboard() {
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPrograma, setCurrentPrograma] = useState('ALL');
-  const [loadError, setLoadError] = useState('');
-  const fetchAbortRef = useRef(null);
-  const searchTermRef = useRef('');
-  useEffect(() => { searchTermRef.current = searchTerm; }, [searchTerm]);
+  // Periodo de matrÃ­cula: la lista muestra solo a los alumnos habilitados para ese periodo
+  // (histÃ³ricos y cachimbos de ese aÃ±o). Antes salÃ­a todo el padrÃ³n y en un periodo nuevo
+  // aparecÃ­an como "cachimbos" alumnos que ya no corresponden a ese ciclo.
+  const [periodos, setPeriodos] = useState([]);
+  const [periodoMatricula, setPeriodoMatricula] = useState('');
+  // SecretarÃ­a de Programa trabaja solo con su carrera; el resto elige.
+  const carreraFija = userRole === 'secretaria_programa' && user?.programa_id != null;
 
-  const fetchStudents = useCallback(async (searchVal = '') => {
-    fetchAbortRef.current?.abort();
-    const controller = new AbortController();
-    fetchAbortRef.current = controller;
+
+  // La lista se descarga una vez (al entrar o al cambiar de carrera) y la bÃºsqueda filtra en el
+  // navegador. Antes cada tecla volvÃ­a a descargar todo el padrÃ³n: era lento y las respuestas
+  // llegaban desordenadas, mostrando resultados de una bÃºsqueda anterior.
+  const visibles = useMemo(
+    () => (searchTerm.trim().length >= 2 ? filtrarEstudiantes(students, searchTerm) : students),
+    [students, searchTerm]
+  );
+
+  const fetchStudents = async () => {
     setLoading(true);
-    setLoadError('');
     try {
-      let url = `${API_BASE}/api/mod-gestion-academica/estudiantes/`;
-      if (currentPrograma && currentPrograma !== 'ALL') {
-        url += `?programa_id=${encodeURIComponent(currentPrograma)}`;
-      }
+      const params = new URLSearchParams();
+      if (currentPrograma && currentPrograma !== 'ALL') params.set('programa_id', currentPrograma);
+      if (periodoMatricula) params.set('periodo_id', periodoMatricula);
+      const url = `${API_BASE}/api/mod-gestion-academica/estudiantes/${params.toString() ? `?${params}` : ''}`;
 
       const response = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-        signal: controller.signal,
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-
-      const term = searchVal.trim().toLowerCase();
-      let finalData = Array.isArray(data) ? data : [];
-      if (term.length >= 2) {
-        finalData = finalData.filter(s =>
-          String(s.dni ?? '').includes(term) ||
-          String(s.nombres ?? '').toLowerCase().includes(term) ||
-          String(s.apellidos ?? '').toLowerCase().includes(term) ||
-          String(s.codigo_estudiante ?? '').toLowerCase().includes(term)
-        );
-      }
-      setStudents(finalData);
+      setStudents(Array.isArray(data) ? data : []);
     } catch (error) {
-      if (error.name === 'AbortError') return;
-      setStudents([]);
-      setLoadError('No se pudo cargar la lista de estudiantes. Intente nuevamente.');
+      console.error('Error fetching students:', error);
     } finally {
-      if (fetchAbortRef.current === controller) setLoading(false);
+      setLoading(false);
     }
-  }, [currentPrograma]);
+  };
+
+  // Periodo por defecto: el de matrÃ­cula abierta mÃ¡s reciente
+  useEffect(() => {
+    let activo = true;
+    fetch(`${API_BASE}/api/mod-programas-estudio/periodos`, {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (!activo || !Array.isArray(data)) return;
+        const orden = [...data].sort((a, b) => String(b.fecha_inicio || b.codigo).localeCompare(String(a.fecha_inicio || a.codigo)));
+        setPeriodos(orden);
+        const abierto = orden.find(p => ['matricula_abierta', 'en_curso'].includes(p.estado)) || orden[0];
+        if (abierto) setPeriodoMatricula(String(abierto.id));
+      })
+      .catch(err => console.error('No se pudieron cargar los periodos:', err));
+    return () => { activo = false; };
+  }, []);
 
   useEffect(() => {
-    if (userRole === 'invitado') return;
-    if (userRole === 'secretaria_programa' && currentPrograma === 'ALL') {
-      const programaAsignado = user?.programa_id ? String(user.programa_id) : '';
-      if (!programaAsignado) {
-        queueMicrotask(() => {
-          setStudents([]);
-          setLoadError('Tu usuario no tiene un programa de estudio asignado.');
-          setLoading(false);
-        });
-        return;
+    if (userRole !== 'invitado' && periodoMatricula) {
+      if (carreraFija && currentPrograma === 'ALL') {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- sync fixed program
+        setCurrentPrograma(String(user.programa_id));
+      } else {
+        fetchStudents();
       }
-      queueMicrotask(() => setCurrentPrograma(programaAsignado));
-      return;
     }
-    fetchStudents(searchTermRef.current);
-  }, [currentPrograma, userRole, user?.programa_id, fetchStudents]);
+    // Solo debe re-ejecutarse al cambiar de programa, periodo o rol (no en cada tecla del buscador).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPrograma, userRole, periodoMatricula]);
 
-  const fetchStudentsRef = useRef(fetchStudents);
-  useEffect(() => { fetchStudentsRef.current = fetchStudents; }, [fetchStudents]);
-
-  const skipInitialSearchRef = useRef(true);
-  useEffect(() => {
-    if (skipInitialSearchRef.current) {
-      skipInitialSearchRef.current = false;
-      return;
-    }
-    const timer = setTimeout(() => fetchStudentsRef.current(searchTerm), 300);
-    return () => clearTimeout(timer);
-  }, [searchTerm]);
+  const periodoActual = periodos.find(p => String(p.id) === String(periodoMatricula));
+  const CONDICION = {
+    matriculado: { texto: 'Matriculado', clase: 'bg-blue-100 text-blue-700 border-blue-200' },
+    historico: { texto: 'HistÃ³rico', clase: 'bg-purple-100 text-purple-700 border-purple-200' },
+    cachimbo: { texto: 'Cachimbo', clase: 'bg-green-100 text-green-700 border-green-200' },
+  };
 
   const handleEnrollClick = (student) => {
     setSelectedStudent(student);
@@ -118,17 +120,17 @@ export function EnrollmentDashboard() {
         onCancel={() => {
           setView('list');
           setSelectedStudent(null);
-          fetchStudents(); // Refrescar en caso de matrícula exitosa
+          fetchStudents(); // Refrescar en caso de matrÃ­cula exitosa
         }} 
       />
     );
   }
 
   const tabs = [
-    { id: 'admision', label: 'Admisión', Icon: UserPlus },
+    { id: 'admision', label: 'AdmisiÃ³n', Icon: UserPlus },
     { id: 'tipos', label: 'Tipos de alumnos', Icon: UserCog },
     { id: 'boleta', label: 'Boleta con QR', Icon: QrCode },
-    { id: 'determinacion', label: 'Determinación', Icon: Scale },
+    { id: 'determinacion', label: 'DeterminaciÃ³n', Icon: Scale },
     { id: 'especiales', label: 'Alumnos especiales', Icon: HeartHandshake },
     { id: 'restricciones', label: 'Restricciones', Icon: ShieldAlert },
     { id: 'resultado', label: 'Resultado final', Icon: Trophy },
@@ -138,7 +140,7 @@ export function EnrollmentDashboard() {
 
   return (
     <div className="sma-page animate-fade-in">
-      {/* Capa decorativa de fondo (ondas, blobs y patrón de puntos) */}
+      {/* Capa decorativa de fondo (ondas, blobs y patrÃ³n de puntos) */}
       <div className="sma-deco" aria-hidden="true">
         <span className="sma-blob sma-blob--a" />
         <span className="sma-blob sma-blob--b" />
@@ -160,7 +162,7 @@ export function EnrollmentDashboard() {
           <span className="sma-hd-ring" />
         </div>
 
-        {/* Birrete académico decorativo */}
+        {/* Birrete acadÃ©mico decorativo */}
         <svg className="sma-birrete" viewBox="0 0 64 64" fill="none" aria-hidden="true">
           <path d="M32 7 L61 20 L32 33 L3 20 Z" fill="#FFFFFF" opacity="0.96" />
           <path d="M32 24.5 L48 17.5" stroke="#55C7FF" strokeWidth="2" strokeLinecap="round" opacity="0.9" />
@@ -172,10 +174,10 @@ export function EnrollmentDashboard() {
         <div className="sma-header-body">
           <div>
             <h3 className="sma-title">
-              Gestión de <span>Matrícula Académica</span>
+              GestiÃ³n de <span>MatrÃ­cula AcadÃ©mica</span>
             </h3>
             <p className="sma-subtitle">
-              Control de procesos de matrícula para estudiantes registrados
+              Control de procesos de matrÃ­cula para estudiantes registrados
             </p>
             {view === 'list' && (
               <div className="sma-header-actions">
@@ -184,7 +186,7 @@ export function EnrollmentDashboard() {
                   className="sma-header-btn"
                 >
                   <PlusCircle size={18} />
-                  Matrícula Extraordinaria
+                  MatrÃ­cula Extraordinaria
                 </button>
               </div>
             )}
@@ -192,8 +194,8 @@ export function EnrollmentDashboard() {
         </div>
       </header>
 
-      {/* Nueve pestañas */}
-      <nav className="sma-tabs" role="tablist" aria-label="Secciones de gestión de matrícula">
+      {/* Nueve pestaÃ±as */}
+      <nav className="sma-tabs" role="tablist" aria-label="Secciones de gestiÃ³n de matrÃ­cula">
         {tabs.map((tab) => (
           <button
             key={tab.id}
@@ -235,15 +237,31 @@ export function EnrollmentDashboard() {
         title="8. Estudiantes"
         description={
           <>
-            Permite visualizar y consultar la información de los estudiantes registrados en el proceso
-            de <b>matrícula académica</b>.
+            Permite visualizar y consultar la informaciÃ³n de los estudiantes registrados en el proceso
+            de <b>matrÃ­cula acadÃ©mica</b>.
           </>
         }
-        chips={['Consulta', 'Búsqueda', 'Matrícula']}
+        chips={['Consulta', 'BÃºsqueda', 'MatrÃ­cula']}
       />
 
+      {periodoActual && (
+        <div className="mb-3 max-w-3xl text-xs text-slate-600 bg-white/70 border border-slate-200 rounded-xl px-4 py-2 leading-relaxed">
+          Periodo <b>{periodoActual.codigo}</b>: se muestran los alumnos <b>histÃ³ricos</b> (ya estudiaron antes)
+          {/-I$|-1$/i.test(periodoActual.codigo || '') ? <> y los <b>cachimbos</b> que ingresaron en {String(periodoActual.codigo).slice(0, 4)}</> : <>; en este periodo no hay cachimbos</>}.
+        </div>
+      )}
       <div className="glass-card p-2 mb-8 flex items-center max-w-3xl gap-2">
-        {['superadmin', 'admin'].includes(userRole) && (
+        <select
+          className="input-field py-3 text-sm bg-slate-50 border-none w-36 font-bold text-primary"
+          value={periodoMatricula}
+          onChange={(e) => setPeriodoMatricula(e.target.value)}
+          title="Periodo de matrÃ­cula"
+        >
+          {periodos.map(p => (
+            <option key={p.id} value={p.id}>{p.codigo}</option>
+          ))}
+        </select>
+        {!carreraFija && (
           <select 
             className="input-field py-3 text-sm bg-slate-50 border-none w-48 font-bold text-primary"
             value={currentPrograma}
@@ -252,37 +270,28 @@ export function EnrollmentDashboard() {
             }}
           >
             <option value="ALL">Todos los Programas</option>
-            {PROGRAMAS.filter(p => p.id !== 'ALL').map(p => (
-              <option key={p.id} value={p.id}>{p.label}</option>
+            {programas.map(p => (
+              <option key={p.id} value={p.id}>{p.nombre}</option>
             ))}
           </select>
         )}
-        <span className="px-4 text-slate-400 text-xl">🔍</span>
+        <span className="px-4 text-slate-400 text-xl">ðŸ”</span>
         <input 
           type="text" 
           className="w-full bg-transparent border-none focus:ring-0 py-3 text-slate-700 placeholder-slate-400 outline-none"
-          placeholder="Buscar por DNI, Nombre o Código..."
+          placeholder="Buscar por DNI, Nombre o CÃ³digo..."
           value={searchTerm} 
           onChange={(e) => setSearchTerm(e.target.value)}
         />
         {loading && <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin mx-4"></div>}
       </div>
 
-      {loadError && (
-        <div className="mb-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          {loadError}
-          <button type="button" onClick={() => fetchStudents(searchTerm)} className="ml-3 font-bold underline">
-            Reintentar
-          </button>
-        </div>
-      )}
-
       <div className="glass-card p-6">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-slate-200">
-                <th className="py-4 px-4 text-xs font-bold text-slate-400 uppercase tracking-wider w-[12%]">Código</th>
+                <th className="py-4 px-4 text-xs font-bold text-slate-400 uppercase tracking-wider w-[12%]">CÃ³digo</th>
                 <th className="py-4 px-4 text-xs font-bold text-slate-400 uppercase tracking-wider w-[35%]">Estudiante</th>
                 <th className="py-4 px-4 text-xs font-bold text-slate-400 uppercase tracking-wider w-[13%]">DNI</th>
                 <th className="py-4 px-4 text-xs font-bold text-slate-400 uppercase tracking-wider w-[15%] max-w-[150px]">Email</th>
@@ -298,32 +307,52 @@ export function EnrollmentDashboard() {
                     <p className="text-slate-500 font-medium">Cargando estudiantes...</p>
                   </td>
                 </tr>
-              ) : students.length === 0 ? (
+              ) : visibles.length === 0 ? (
                 <tr>
                   <td colSpan="6" className="py-12 text-center">
-                    <div className="text-4xl mb-3 opacity-50">🎓</div>
-                    <p className="text-slate-500 font-medium">No hay estudiantes registrados.</p>
+                    <div className="text-4xl mb-3 opacity-50">ðŸŽ“</div>
+                    <p className="text-slate-500 font-medium">
+                      {students.length === 0
+                        ? (periodoActual ? `No hay alumnos habilitados para matricularse en ${periodoActual.codigo}.` : 'No hay estudiantes registrados.')
+                        : `NingÃºn estudiante coincide con "${searchTerm}".`}
+                    </p>
                   </td>
                 </tr>
               ) : (
-                students.map(student => (
+                visibles.map(student => (
                   <tr key={student.id} className="hover:bg-slate-50 transition-colors">
                     <td className="py-3 px-4 font-bold text-slate-700">{student.codigo_estudiante}</td>
                     <td className="py-3 px-4 text-slate-800 font-medium">{student.nombres} {student.apellidos}</td>
                     <td className="py-3 px-4 text-slate-600">{student.dni}</td>
                     <td className="py-3 px-4 text-slate-500 text-sm truncate max-w-[150px]" title={student.email_personal}>{student.email_personal || '-'}</td>
                     <td className="py-3 px-4">
-                      <span className="inline-block px-2 py-1 bg-green-100 text-green-700 text-[10px] font-bold uppercase rounded border border-green-200">
-                        {student.estado_academico}
-                      </span>
+                      {CONDICION[student.condicion_periodo] ? (
+                        <span className={`inline-block px-2 py-1 text-[10px] font-bold uppercase rounded border ${CONDICION[student.condicion_periodo].clase}`}>
+                          {CONDICION[student.condicion_periodo].texto}
+                        </span>
+                      ) : (
+                        <span className={`inline-block px-2 py-1 text-[10px] font-bold uppercase rounded border ${
+                          student.estado_academico === 'matriculado'
+                            ? 'bg-blue-100 text-blue-700 border-blue-200'
+                            : 'bg-green-100 text-green-700 border-green-200'
+                        }`}>
+                          {student.estado_academico}
+                        </span>
+                      )}
                     </td>
                     <td className="py-3 px-4 text-right">
-                      <button 
-                        className="px-4 py-1.5 text-sm font-semibold text-primary bg-primary/10 hover:bg-primary/20 rounded-lg transition-colors"
-                        onClick={() => handleEnrollClick(student)}
-                      >
-                        Matricular
-                      </button>
+                      {(student.condicion_periodo ? student.condicion_periodo === 'matriculado' : student.estado_academico === 'matriculado') ? (
+                        <span className="inline-flex items-center gap-1 px-4 py-1.5 text-sm font-semibold text-blue-700 bg-blue-50 rounded-lg whitespace-nowrap">
+                          Matriculado âœ“
+                        </span>
+                      ) : (
+                        <button
+                          className="px-4 py-1.5 text-sm font-semibold text-primary bg-primary/10 hover:bg-primary/20 rounded-lg transition-colors"
+                          onClick={() => handleEnrollClick(student)}
+                        >
+                          Matricular
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))
@@ -348,3 +377,4 @@ export function EnrollmentDashboard() {
     </div>
   );
 }
+

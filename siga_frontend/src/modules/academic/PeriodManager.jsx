@@ -1,21 +1,41 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { apiClient } from '../../core/api/client';
 import { useToast } from '../../core/ui/ToastContext';
-import { X, Lightbulb, Calendar, Plus, Clock, ArrowRight } from 'lucide-react';
+import { X, Calendar, Plus, Clock, Pencil } from 'lucide-react';
+
+const PERIODO_VACIO = {
+  codigo: '',
+  fecha_inicio: '',
+  fecha_fin: '',
+  fecha_fin_matricula_regular: '',
+  fecha_fin_matricula_extemporanea: '',
+  estado: 'planificacion'
+};
+// Fechas como texto AAAA-MM-DD (sin convertir zona horaria, que corre un dÃ­a).
+const soloFecha = (v) => (v ? String(v).slice(0, 10) : '');
+const formatoFecha = (v) => (v ? soloFecha(v).split('-').reverse().join('/') : 'â€”');
 
 export function PeriodManager({ onClose, onUpdate }) {
   const toast = useToast();
   const [periods, setPeriods] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [newPeriod, setNewPeriod] = useState({
-    codigo: '',
-    fecha_inicio: '',
-    fecha_fin: '',
-    fecha_fin_matricula_regular: '',
-    fecha_fin_matricula_extemporanea: '',
-    estado: 'planificacion'
-  });
+  const [newPeriod, setNewPeriod] = useState(PERIODO_VACIO);
+  // Periodo cuyas fechas se estÃ¡n corrigiendo (null = creando uno nuevo).
+  const [editando, setEditando] = useState(null);
+
+  const empezarEdicion = (period) => {
+    setEditando(period);
+    setNewPeriod({
+      codigo: period.codigo,
+      fecha_inicio: soloFecha(period.fecha_inicio),
+      fecha_fin: soloFecha(period.fecha_fin),
+      fecha_fin_matricula_regular: soloFecha(period.fecha_fin_matricula_regular),
+      fecha_fin_matricula_extemporanea: soloFecha(period.fecha_fin_matricula_extemporanea),
+      estado: period.estado,
+    });
+  };
+  const cancelarEdicion = () => { setEditando(null); setNewPeriod(PERIODO_VACIO); };
 
   const fetchPeriods = async () => {
     setLoading(true);
@@ -30,50 +50,43 @@ export function PeriodManager({ onClose, onUpdate }) {
   };
 
   useEffect(() => {
-    queueMicrotask(() => {
-      fetchPeriods();
-    });
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data load
+    fetchPeriods();
   }, []);
 
   const handleCreate = async (e) => {
     e.preventDefault();
-    const codigo = (newPeriod.codigo || '').trim();
-    const inicio = newPeriod.fecha_inicio;
-    const fin = newPeriod.fecha_fin;
-    const regular = newPeriod.fecha_fin_matricula_regular;
-    const extemporanea = newPeriod.fecha_fin_matricula_extemporanea;
-
-    if (!codigo) {
-      toast.error('El código del periodo es obligatorio.');
+    const p = newPeriod;
+    if (p.fecha_fin < p.fecha_inicio) {
+      toast.error('La fecha de fin no puede ser anterior a la de inicio.');
       return;
     }
-    if (!inicio || !fin || !regular || !extemporanea) {
-      toast.error('Todas las fechas del periodo son obligatorias.');
+    if (p.fecha_fin_matricula_extemporanea && p.fecha_fin_matricula_regular && p.fecha_fin_matricula_extemporanea < p.fecha_fin_matricula_regular) {
+      toast.error('El cierre de matrÃ­cula extemporÃ¡nea no puede ser anterior al de la regular.');
       return;
     }
-    if (fin <= inicio) {
-      toast.error('La fecha de fin debe ser posterior a la fecha de inicio.');
-      return;
-    }
-    if (regular < inicio || regular > fin || extemporanea < inicio || extemporanea > fin) {
-      toast.error('Los cierres de matrícula deben estar dentro del rango del periodo.');
-      return;
-    }
-    if (extemporanea < regular) {
-      toast.error('El cierre extemporáneo no puede ser anterior al cierre regular.');
-      return;
-    }
-
     setIsSubmitting(true);
     try {
-      await apiClient.callModule('mod-programas-estudio', 'periodos', 'POST', { ...newPeriod, codigo });
-      setNewPeriod({ codigo: '', fecha_inicio: '', fecha_fin: '', fecha_fin_matricula_regular: '', fecha_fin_matricula_extemporanea: '', estado: 'planificacion' });
-      fetchPeriods();
+      if (editando) {
+        await apiClient.callModule('mod-programas-estudio', `periodos/${editando.id}`, 'PUT', {
+          fecha_inicio: p.fecha_inicio,
+          fecha_fin: p.fecha_fin,
+          fecha_fin_matricula_regular: p.fecha_fin_matricula_regular || null,
+          fecha_fin_matricula_extemporanea: p.fecha_fin_matricula_extemporanea || null,
+        });
+        toast.success(`Fechas del periodo ${editando.codigo} actualizadas`);
+        setEditando(null);
+      } else {
+        await apiClient.callModule('mod-programas-estudio', 'periodos', 'POST', p);
+        toast.success('Periodo acadÃ©mico creado exitosamente');
+      }
+      setNewPeriod(PERIODO_VACIO);
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data load
+    fetchPeriods();
       if (onUpdate) onUpdate();
-      toast.success('Periodo académico creado exitosamente');
     } catch (error) {
-      console.error('Error creating period:', error);
-      toast.error(error.message || 'Hubo un error al crear el periodo');
+      console.error('Error guardando el periodo:', error);
+      toast.error(error.message || 'Hubo un error al guardar el periodo');
     } finally {
       setIsSubmitting(false);
     }
@@ -85,14 +98,14 @@ export function PeriodManager({ onClose, onUpdate }) {
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200/60">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-            Planificación
+            PlanificaciÃ³n
           </span>
         );
       case 'matricula_abierta':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-sky-50 text-sky-700 border border-sky-200/60">
             <span className="w-1.5 h-1.5 rounded-full bg-sky-500 animate-pulse"></span>
-            Matrícula Abierta
+            MatrÃ­cula Abierta
           </span>
         );
       case 'activo':
@@ -107,7 +120,7 @@ export function PeriodManager({ onClose, onUpdate }) {
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">
             <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
-            Histórico
+            HistÃ³rico
           </span>
         );
       default:
@@ -123,7 +136,8 @@ export function PeriodManager({ onClose, onUpdate }) {
   const handleStatusChange = async (periodoId, nuevoEstado) => {
     try {
       await apiClient.callModule('mod-programas-estudio', `periodos/${periodoId}/estado?estado=${nuevoEstado}`, 'PUT');
-      fetchPeriods();
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data load
+    fetchPeriods();
       if (onUpdate) onUpdate();
       toast.success(`Estado del periodo actualizado a "${nuevoEstado}"`);
     } catch (error) {
@@ -138,8 +152,8 @@ export function PeriodManager({ onClose, onUpdate }) {
         {/* Modal Header */}
         <div className="flex justify-between items-center px-6 py-4 border-b border-slate-100">
           <div>
-            <h5 className="font-bold text-base text-slate-900 tracking-tight">Periodos y Calendario Académico</h5>
-            <p className="text-xs text-slate-400">Control de cronogramas y ventanas de matrícula regular/extemporánea</p>
+            <h5 className="font-bold text-base text-slate-900 tracking-tight">Periodos y Calendario AcadÃ©mico</h5>
+            <p className="text-xs text-slate-400">Control de cronogramas y ventanas de matrÃ­cula regular/extemporÃ¡nea</p>
           </div>
           <button 
             onClick={onClose} 
@@ -153,19 +167,27 @@ export function PeriodManager({ onClose, onUpdate }) {
         <div className="flex flex-col md:flex-row flex-grow overflow-hidden">
           {/* Formulario Lateral */}
           <div className="w-full md:w-5/12 p-6 bg-slate-50/60 border-r border-slate-100 overflow-y-auto">
-            <div className="flex items-center gap-1.5 mb-4">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Crear Periodo</span>
+            <div className="flex items-center justify-between gap-1.5 mb-4">
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                {editando ? `Editar fechas de ${editando.codigo}` : 'Crear Periodo'}
+              </span>
+              {editando && (
+                <button type="button" onClick={cancelarEdicion} className="text-[11px] font-semibold text-primary hover:underline">
+                  Cancelar ediciÃ³n
+                </button>
+              )}
             </div>
 
             <form onSubmit={handleCreate} className="space-y-3.5">
               <div>
-                <label className="block text-[11px] font-semibold text-slate-600 uppercase tracking-wider mb-1">Código del Periodo</label>
+                <label className="block text-[11px] font-semibold text-slate-600 uppercase tracking-wider mb-1">CÃ³digo del Periodo</label>
                 <input 
                   type="text" 
                   className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all font-mono uppercase" 
-                  value={newPeriod.codigo} 
+                  value={newPeriod.codigo}
                   onChange={e => setNewPeriod({...newPeriod, codigo: e.target.value})}
-                  required 
+                  required
+                  disabled={Boolean(editando)}
                   placeholder="Ej. 2026-I"
                 />
               </div>
@@ -194,7 +216,7 @@ export function PeriodManager({ onClose, onUpdate }) {
               </div>
 
               <div>
-                <label className="block text-[11px] font-semibold text-slate-600 uppercase tracking-wider mb-1">Cierre Matrícula Regular</label>
+                <label className="block text-[11px] font-semibold text-slate-600 uppercase tracking-wider mb-1">Cierre MatrÃ­cula Regular</label>
                 <input 
                   type="date" 
                   className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all" 
@@ -205,7 +227,7 @@ export function PeriodManager({ onClose, onUpdate }) {
               </div>
 
               <div>
-                <label className="block text-[11px] font-semibold text-slate-600 uppercase tracking-wider mb-1">Cierre Matrícula Extemporánea</label>
+                <label className="block text-[11px] font-semibold text-slate-600 uppercase tracking-wider mb-1">Cierre MatrÃ­cula ExtemporÃ¡nea</label>
                 <input 
                   type="date" 
                   className="w-full px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all" 
@@ -215,6 +237,7 @@ export function PeriodManager({ onClose, onUpdate }) {
                 />
               </div>
 
+              {!editando && (
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 uppercase tracking-wider mb-1">Estado Inicial</label>
                 <select 
@@ -222,13 +245,14 @@ export function PeriodManager({ onClose, onUpdate }) {
                   value={newPeriod.estado} 
                   onChange={e => setNewPeriod({...newPeriod, estado: e.target.value})}
                 >
-                  <option value="planificacion">Planificación</option>
-                  <option value="matricula_abierta">Matrícula Abierta</option>
+                  <option value="planificacion">PlanificaciÃ³n</option>
+                  <option value="matricula_abierta">MatrÃ­cula Abierta</option>
                   <option value="en_curso">En Curso</option>
                 </select>
               </div>
+              )}
 
-              <button 
+              <button
                 type="submit" 
                 className="w-full py-2.5 mt-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                 disabled={isSubmitting}
@@ -237,16 +261,16 @@ export function PeriodManager({ onClose, onUpdate }) {
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                 ) : (
                   <>
-                    <Plus size={15} />
-                    <span>Registrar Periodo</span>
+                    {editando ? <Pencil size={15} /> : <Plus size={15} />}
+                    <span>{editando ? 'Guardar fechas' : 'Registrar Periodo'}</span>
                   </>
                 )}
               </button>
             </form>
             
             <div className="mt-5 p-3.5 rounded-xl bg-slate-100/70 border border-slate-200/80 text-[11px] text-slate-600 leading-relaxed">
-              <span className="font-bold text-slate-800 block mb-1">Información de Ciclos:</span>
-              El estado <strong>Matrícula Abierta</strong> habilita el registro de inscripciones en el portal. Al pasar a <strong>En Curso</strong>, el motor restringe la matrícula regular.
+              <span className="font-bold text-slate-800 block mb-1">InformaciÃ³n de Ciclos:</span>
+              El estado <strong>MatrÃ­cula Abierta</strong> habilita el registro de inscripciones en el portal. Al pasar a <strong>En Curso</strong>, el motor restringe la matrÃ­cula regular.
             </div>
           </div>
           
@@ -269,7 +293,7 @@ export function PeriodManager({ onClose, onUpdate }) {
                 <div className="w-10 h-10 mx-auto mb-2 rounded-xl bg-slate-100 text-slate-400 flex items-center justify-center">
                   <Calendar size={20} />
                 </div>
-                <p className="text-slate-400 text-xs">No hay periodos registrados aún.</p>
+                <p className="text-slate-400 text-xs">No hay periodos registrados aÃºn.</p>
               </div>
             ) : (
               <div className="space-y-2.5">
@@ -287,14 +311,21 @@ export function PeriodManager({ onClose, onUpdate }) {
                           <h4 className="font-bold text-sm text-slate-900 tracking-tight">{period.codigo}</h4>
                           <div className="text-[11px] text-slate-400 flex items-center gap-1.5 mt-0.5">
                             <Clock size={12} className="text-slate-400" />
-                            <span>
-                              {period.fecha_inicio ? new Date(period.fecha_inicio).toLocaleDateString() : '-'}
-                            </span>
-                            <span>→</span>
-                            <span>
-                              {period.fecha_fin ? new Date(period.fecha_fin).toLocaleDateString() : '-'}
-                            </span>
+                            <span>{formatoFecha(period.fecha_inicio)}</span>
+                            <span>â†’</span>
+                            <span>{formatoFecha(period.fecha_fin)}</span>
                           </div>
+                          <div className="text-[11px] text-slate-500 mt-1">
+                            MatrÃ­cula regular hasta <strong className="text-slate-700">{formatoFecha(period.fecha_fin_matricula_regular)}</strong>
+                            {' Â· '}extemporÃ¡nea hasta <strong className="text-slate-700">{formatoFecha(period.fecha_fin_matricula_extemporanea)}</strong>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => empezarEdicion(period)}
+                            className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline"
+                          >
+                            <Pencil size={11} /> Editar fechas
+                          </button>
                         </div>
                       </div>
 
@@ -308,10 +339,10 @@ export function PeriodManager({ onClose, onUpdate }) {
                             value={period.estado}
                             onChange={(e) => handleStatusChange(period.id, e.target.value)}
                           >
-                            <option value="planificacion">Planificación</option>
-                            <option value="matricula_abierta">Matrícula Abierta</option>
+                            <option value="planificacion">PlanificaciÃ³n</option>
+                            <option value="matricula_abierta">MatrÃ­cula Abierta</option>
                             <option value="en_curso">En Curso</option>
-                            <option value="historico">Histórico</option>
+                            <option value="historico">HistÃ³rico</option>
                           </select>
                         </div>
                       </div>
@@ -326,3 +357,4 @@ export function PeriodManager({ onClose, onUpdate }) {
     </div>
   );
 }
+

@@ -1,16 +1,20 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { apiClient } from '../../core/api/client';
-import { FileText, Repeat, GraduationCap } from 'lucide-react';
+import { Plus, Eye, FileText, Repeat, GraduationCap } from 'lucide-react';
 import { ConvalidacionesTab } from './ConvalidacionesTab';
 import { BecasTab } from './BecasTab';
+import { NuevaSolicitudModal } from './NuevaSolicitudModal';
 
 export function TramitesDashboard() {
   const [activeTab, setActiveTab] = useState('solicitudes');
   const [loading, setLoading] = useState(false);
-  
+
   // States for Solicitudes (TUPA)
   const [solicitudes, setSolicitudes] = useState([]);
-  
+  const [estudiantes, setEstudiantes] = useState([]);
+  const [mostrarNueva, setMostrarNueva] = useState(false);
+  const [aviso, setAviso] = useState('');
+
   const [error, setError] = useState('');
 
   const fetchSolicitudes = async () => {
@@ -21,11 +25,12 @@ export function TramitesDashboard() {
         apiClient.request('/api/mod-gestion-academica/tramites/'),
         apiClient.request('/api/mod-gestion-academica/estudiantes/').catch(() => []),
       ]);
+      setEstudiantes(Array.isArray(estudiantes) ? estudiantes : []);
       const nombres = new Map((estudiantes || []).map(e => [e.id, `${e.apellidos}, ${e.nombres}`]));
       setSolicitudes((tramites || []).map(t => ({ ...t, nombre_alumno: nombres.get(t.estudiante_id) })));
     } catch (err) {
       console.error(err);
-      setError('No se pudieron cargar los trámites.');
+      setError('No se pudieron cargar los trÃ¡mites.');
       setSolicitudes([]);
     } finally {
       setLoading(false);
@@ -33,11 +38,10 @@ export function TramitesDashboard() {
   };
 
   useEffect(() => {
-    queueMicrotask(() => {
-      if (activeTab === 'solicitudes') {
-        fetchSolicitudes();
-      }
-    });
+    if (activeTab === 'solicitudes') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- load on tab change
+      fetchSolicitudes();
+    }
   }, [activeTab]);
 
   const handleEstadoChange = async (id, newEstado) => {
@@ -48,8 +52,15 @@ export function TramitesDashboard() {
     } catch (err) {
       console.error(err);
       setSolicitudes(anterior);
-      setError('No se pudo actualizar el estado del trámite.');
+      setError('No se pudo actualizar el estado del trÃ¡mite.');
     }
+  };
+
+  const alCrearSolicitud = (creada, estudiante) => {
+    setMostrarNueva(false);
+    setError('');
+    setSolicitudes(prev => [{ ...creada, nombre_alumno: `${estudiante.apellidos}, ${estudiante.nombres}` }, ...prev]);
+    setAviso(`Solicitud #${creada.id} registrada: ${creada.tipo_tramite} para ${estudiante.apellidos}, ${estudiante.nombres}.`);
   };
 
   const renderTabHeader = (id, label, icon) => (
@@ -71,15 +82,15 @@ export function TramitesDashboard() {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center">
         <div>
           <h3 className="text-3xl font-bold tracking-tight text-slate-text">
-            Gestión de <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-500 to-orange-500">Trámites y Casuísticas</span>
+            GestiÃ³n de <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-500 to-orange-500">TrÃ¡mites y CasuÃ­sticas</span>
           </h3>
-          <p className="text-slate-500 text-sm mt-1">Administración TUPA, Convalidaciones, Becas y Resoluciones</p>
+          <p className="text-slate-500 text-sm mt-1">AdministraciÃ³n TUPA, Convalidaciones, Becas y Resoluciones</p>
         </div>
       </div>
 
       <div className="w-full">
         <div className="flex border-b-0 space-x-1">
-          {renderTabHeader('solicitudes', 'Trámites y Solicitudes', <FileText size={16} />)}
+          {renderTabHeader('solicitudes', 'TrÃ¡mites y Solicitudes', <FileText size={16} />)}
           {renderTabHeader('convalidaciones', 'Convalidaciones', <Repeat size={16} />)}
           {renderTabHeader('becas', 'Becas y Beneficios', <GraduationCap size={16} />)}
         </div>
@@ -89,9 +100,16 @@ export function TramitesDashboard() {
             <div className="space-y-6 animate-fade-in">
               <div className="flex justify-between items-center mb-4">
                 <h4 className="text-lg font-bold text-slate-700">Solicitudes Ingresadas</h4>
-
+                <button
+                  type="button"
+                  onClick={() => { setAviso(''); setMostrarNueva(true); }}
+                  className="btn-primary py-1.5 px-4 text-sm rounded-lg flex items-center gap-1.5"
+                >
+                  <Plus size={16} /> Nueva Solicitud Manual
+                </button>
               </div>
-              
+
+              {aviso && <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{aviso}</div>}
               {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>}
               {loading ? (
                 <div className="text-center py-10"><div className="w-8 h-8 border-4 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto"></div></div>
@@ -101,7 +119,7 @@ export function TramitesDashboard() {
                     <tr>
                       <th className="py-3 px-4 font-bold text-slate-600">ID / Fecha</th>
                       <th className="py-3 px-4 font-bold text-slate-600">Estudiante</th>
-                      <th className="py-3 px-4 font-bold text-slate-600">Tipo de Trámite</th>
+                      <th className="py-3 px-4 font-bold text-slate-600">Tipo de TrÃ¡mite</th>
                       <th className="py-3 px-4 font-bold text-slate-600">Estado</th>
                       <th className="py-3 px-4 font-bold text-slate-600 text-right">Acciones</th>
                     </tr>
@@ -139,7 +157,9 @@ export function TramitesDashboard() {
                             <option value="emitido">Emitido / Aprobado</option>
                             <option value="rechazado">Rechazado</option>
                           </select>
-
+                          <button className="btn-icon text-slate-400 hover:text-amber-600" title="Ver Detalles">
+                            <Eye size={18} />
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -154,6 +174,16 @@ export function TramitesDashboard() {
           {activeTab === 'becas' && <BecasTab />}
         </div>
       </div>
+
+      {mostrarNueva && (
+        <NuevaSolicitudModal
+          estudiantes={estudiantes}
+          cargandoEstudiantes={loading}
+          onClose={() => setMostrarNueva(false)}
+          onCreated={alCrearSolicitud}
+        />
+      )}
     </div>
   );
 }
+

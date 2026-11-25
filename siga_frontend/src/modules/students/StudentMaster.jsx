@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
+import { useState, useEffect, useRef, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../../core/auth/useAuth';
 import { API_BASE } from '../../core/api/client';
+import { usePrograms } from '../../core/api/usePrograms';
+import { filtrarEstudiantes } from '../../core/studentSearch';
 import { useToast } from '../../core/ui/ToastContext';
 import { useConfirm } from '../../core/ui/ConfirmModal';
-import { PROGRAMAS, getProgramaLabel } from '../../core/catalog/programas';
 import techBg from '../../assets/tech-bg.jpg';
 import { EditStudentModal } from './EditStudentModal';
 import { StudentDetail } from './StudentDetail';
@@ -414,45 +415,40 @@ const createEmptyStudentForm = (programaId = '') => ({
 
 const TIPOS_SANGRE = ['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-'];
 
-const normalizarBusqueda = (valor) => String(valor ?? '')
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .replace(/\s+/g, ' ')
-  .trim()
-  .toLowerCase();
+/** Carreras registradas en Gestión Académica, como opciones del filtro ("Todos" + cada carrera). */
+function useProgramasCatalogo() {
+  const programas = usePrograms();
+  const PROGRAMAS = [
+    { id: 'ALL', label: 'Todos los Programas' },
+    ...programas.map(p => ({ id: String(p.id), label: p.nombre })),
+  ];
+  const PROGRAMAS_OPTIONS = [
+    { value: '', label: 'Seleccione una carrera...' },
+    ...PROGRAMAS.filter(programa => programa.id !== 'ALL').map(programa => ({
+      value: programa.id,
+      label: programa.label,
+    })),
+  ];
+  const getProgramaLabel = (programaId) => {
+    const programa = PROGRAMAS.find(item => item.id === String(programaId));
+    return programa ? programa.label : 'Sin carrera seleccionada';
+  };
+  // Orden alfabético por apellidos. Antes se agrupaba por carrera y, con "Todos los
+  // Programas", la primera página quedaba llena con una sola carrera (la primera
+  // alfabéticamente), como si todos los alumnos fueran de ella.
+  const compareStudents = (a, b) => {
+    const porApellidos = String(a.apellidos ?? '').localeCompare(String(b.apellidos ?? ''), 'es', { sensitivity: 'base' });
+    if (porApellidos !== 0) return porApellidos;
+    return String(a.nombres ?? '').localeCompare(String(b.nombres ?? ''), 'es', { sensitivity: 'base' });
+  };
+  return { PROGRAMAS, PROGRAMAS_OPTIONS, getProgramaLabel, compareStudents };
+}
 
-const ESTADOS_ESTUDIANTE_VIGENTE = new Set([
-  'postulante',
-  'ingresante',
-  'matriculado',
-  'regular',
-  'estudiante',
-  'reingreso',
-  'vigente',
-  'activo',
-]);
-
-const esEstudianteVigente = (estudiante) => ESTADOS_ESTUDIANTE_VIGENTE.has(normalizarBusqueda(estudiante?.estado_academico));
-
-const compareStudentsByCarrera = (a, b) => {
-  const carreraA = a.programa_id ? getProgramaLabel(a.programa_id) : '';
-  const carreraB = b.programa_id ? getProgramaLabel(b.programa_id) : '';
-  if (!carreraA !== !carreraB) return carreraA ? -1 : 1;
-  const porCarrera = carreraA.localeCompare(carreraB, 'es', { sensitivity: 'base' });
-  if (porCarrera !== 0) return porCarrera;
-  const porApellidos = String(a.apellidos ?? '').localeCompare(String(b.apellidos ?? ''), 'es', { sensitivity: 'base' });
-  if (porApellidos !== 0) return porApellidos;
-  return String(a.nombres ?? '').localeCompare(String(b.nombres ?? ''), 'es', { sensitivity: 'base' });
-};
-
-function ProgramaFilter({ value, onChange, programas = [] }) {
+function ProgramaFilter({ programas: PROGRAMAS, value, onChange }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef(null);
-  const opciones = programas.length > 0
-    ? [{ id: 'ALL', label: 'Todos los Programas' }, ...programas]
-    : [];
-  const selected = opciones.find(p => p.id === String(value)) || opciones[0];
-  const isAll = selected?.id === 'ALL';
+  const selected = PROGRAMAS.find(p => String(p.id) === String(value)) || PROGRAMAS[0];
+  const isAll = selected.id === 'ALL';
 
   useEffect(() => {
     if (!open) return;
@@ -467,8 +463,6 @@ function ProgramaFilter({ value, onChange, programas = [] }) {
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [open]);
-
-  if (!selected) return null;
 
   return (
     <div ref={containerRef} className="relative w-full md:w-80">
@@ -488,6 +482,11 @@ function ProgramaFilter({ value, onChange, programas = [] }) {
           <span className="block text-[10px] font-bold uppercase tracking-wider text-primary/70 leading-none mb-1">Programa de Estudio</span>
           <span className="block text-sm font-bold text-slate-text truncate">{selected.label}</span>
         </span>
+        {!isAll && (
+          <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-md bg-primary text-white text-[10px] font-bold shadow-sm shadow-primary/40">
+            {selected.id}
+          </span>
+        )}
         <ChevronDown size={18} className={`flex-shrink-0 text-primary transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
       </button>
 
@@ -497,7 +496,7 @@ function ProgramaFilter({ value, onChange, programas = [] }) {
             <span className="text-[10px] font-bold uppercase tracking-wider text-primary/80">Filtrar por programa</span>
           </div>
           <div className="max-h-72 overflow-y-auto custom-scrollbar p-1.5" role="listbox">
-            {opciones.map(p => {
+            {PROGRAMAS.map(p => {
               const active = String(p.id) === String(value);
               const all = p.id === 'ALL';
               return (
@@ -528,7 +527,8 @@ function ProgramaFilter({ value, onChange, programas = [] }) {
 export function StudentMaster() {
   const { user } = useAuth();
   const toast = useToast();
-  const confirmDialog = useConfirm();
+  const confirmar = useConfirm(); // los avisos (toast) no tienen confirmación; se usa el modal
+  const { PROGRAMAS, PROGRAMAS_OPTIONS, getProgramaLabel, compareStudents } = useProgramasCatalogo();
   const userRoles = user?.roles ? user.roles.map(r => typeof r === 'string' ? r : r.nombre || r.name) : [];
   const primaryRole = user?.is_superuser ? 'superadmin' : (userRoles.length > 0 ? userRoles[0] : (user?.role || 'invitado'));
   const userRole = primaryRole;
@@ -538,12 +538,10 @@ export function StudentMaster() {
   const [showModal, setShowModal] = useState(false);
   const [editingStudent, setEditingStudent] = useState(null);
   const [wizardStep, setWizardStep] = useState(1);
-  const searchTermRef = useRef('');
-  const searchRequestRef = useRef(0);
-  const searchAbortRef = useRef(null);
-  const searchTimerRef = useRef(null);
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [currentPrograma, setCurrentPrograma] = useState('ALL');
+  // Secretaría de Programa trabaja solo con su carrera; el resto elige.
+  const carreraFija = userRole === 'secretaria_programa' && user?.programa_id != null;
   const [stepDir, setStepDir] = useState('forward');
   const [loadError, setLoadError] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -555,52 +553,6 @@ export function StudentMaster() {
   const [codeLoading, setCodeLoading] = useState(false);
 
   const [showMissing, setShowMissing] = useState(false);
-  const [programas, setProgramas] = useState([]);
-
-  const labelPrograma = (programaId) => {
-    const cargado = programas.find(p => p.id === String(programaId));
-    return cargado ? cargado.label : getProgramaLabel(programaId);
-  };
-
-  const programasOptions = [
-    { value: '', label: 'Seleccione una carrera...' },
-    ...programas.map(p => ({ value: p.id, label: p.label })),
-  ];
-  const programaActivo = currentPrograma !== 'ALL' && programas.some(p => p.id === String(currentPrograma))
-    ? currentPrograma
-    : 'ALL';
-
-  useEffect(() => {
-    let activo = true;
-    const cargarProgramas = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/mod-programas-estudio/programas`, {
-          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-        });
-        if (!res.ok || res.headers.get('X-Fallback') === 'true') {
-          if (activo) setProgramas([]);
-          return;
-        }
-        const data = await res.json();
-        const lista = Array.isArray(data) ? data : [];
-        if (activo) {
-          setProgramas(lista
-            .filter(p => p?.id !== null && p?.id !== undefined
-              && PROGRAMAS.some(oficial => oficial.id !== 'ALL' && oficial.id === String(p.id)))
-            .map(p => ({
-              id: String(p.id),
-              codigo: p.codigo || '',
-              label: p.nombre || getProgramaLabel(p.id),
-            })));
-        }
-      } catch (e) {
-        console.error('No se pudieron cargar los programas de estudio:', e);
-        if (activo) setProgramas([]);
-      }
-    };
-    cargarProgramas();
-    return () => { activo = false; };
-  }, []);
 
   useEffect(() => {
     if (wizardBodyRef.current) {
@@ -620,11 +572,9 @@ export function StudentMaster() {
   const missingBySector = (stepId) => (SECTOR_REQUIRED[stepId] || []).filter(isFieldMissing);
   const sectorHasMissing = (stepId) => missingBySector(stepId).length > 0;
   const defaultProgramaId = () => {
-    if (programas.length === 0) return '';
-    if (currentPrograma !== 'ALL' && programas.some(p => p.id === String(currentPrograma))) return currentPrograma;
-    if (form.programa_id && programas.some(p => p.id === String(form.programa_id))) return form.programa_id;
-    if (user?.programa_id && programas.some(p => p.id === String(user.programa_id))) return String(user.programa_id);
-    return '';
+    if (currentPrograma !== 'ALL') return currentPrograma;
+    if (form.programa_id) return form.programa_id;
+    return user?.programa_id ? String(user.programa_id) : '';
   };
 
   const generarCodigoLocalUnico = () => {
@@ -663,118 +613,19 @@ export function StudentMaster() {
     }
   };
 
-  const handleSearch = useCallback(async (val = '', programa = programaActivo) => {
-    const requestId = ++searchRequestRef.current;
-    searchAbortRef.current?.abort();
-    const controller = new AbortController();
-    searchAbortRef.current = controller;
-    setSearchTerm(val);
-    searchTermRef.current = val;
-    setCurrentPage(1);
-    setLoading(true);
-    setLoadError(null);
-    try {
-      let url = `${API_BASE}/api/mod-gestion-academica/estudiantes/`;
-
-      if (programa && programa !== 'ALL') {
-        url += `?programa_id=${encodeURIComponent(programa)}`;
-      }
-
-      const res = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-        signal: controller.signal
-      });
-
-      if (!res.ok) {
-        let detalle = `El servicio de estudiantes respondio ${res.status}.`;
-        try {
-          const cuerpo = await res.json();
-          detalle = cuerpo.detail || cuerpo.message || `El servicio de estudiantes respondio ${res.status}.`;
-        } catch {
-          detalle = `El servicio de estudiantes respondio ${res.status}.`;
-        }
-        console.error('API Error:', detalle);
-        if (requestId !== searchRequestRef.current) return;
-        setStudents([]);
-        setLoadError(detalle);
-        return;
-      }
-
-      if (res.headers.get('X-Fallback') === 'true') {
-        const detalle = res.headers.get('X-Fallback-Message')
-          || 'El servicio de estudiantes respondio con datos degradados.';
-        console.error('Respuesta degradada:', detalle);
-        if (requestId !== searchRequestRef.current) return;
-        setStudents([]);
-        setLoadError(detalle);
-        return;
-      }
-
-      const data = await res.json();
-      if (requestId !== searchRequestRef.current) return;
-      const dataArray = Array.isArray(data) ? data : [];
-      const sorted = dataArray.filter(esEstudianteVigente).sort(compareStudentsByCarrera);
-
-      const term = normalizarBusqueda(val);
-      if (term) {
-        const filtered = sorted.filter(s => {
-          const campos = [
-            s.dni,
-            s.codigo_estudiante,
-            s.nombres,
-            s.apellidos,
-            `${s.nombres ?? ''} ${s.apellidos ?? ''}`,
-          ];
-          return campos.some(campo => normalizarBusqueda(campo).includes(term));
-        });
-        setStudents(filtered);
+  useEffect(() => {
+    if (userRole !== 'invitado') {
+      if (carreraFija && currentPrograma === 'ALL') {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- sync fixed program
+        setCurrentPrograma(String(user.programa_id));
       } else {
-        setStudents(sorted);
+        handleSearch(searchTerm); // eslint-disable-line react-hooks/immutability
       }
-    } catch (e) {
-      if (e?.name === 'AbortError' || requestId !== searchRequestRef.current) return;
-      console.error(e);
-      setStudents([]);
-      setLoadError('No se pudo conectar con el servidor. Verifique que el backend este levantado.');
-    } finally {
-      if (requestId === searchRequestRef.current) setLoading(false);
     }
-  }, [programaActivo]);
-
-  const handleSearchInput = (value) => {
-    setSearchTerm(value);
-    searchTermRef.current = value;
-    setCurrentPage(1);
-    clearTimeout(searchTimerRef.current);
-    searchTimerRef.current = setTimeout(() => handleSearch(value), 250);
-  };
-
-  useEffect(() => () => {
-    clearTimeout(searchTimerRef.current);
-    searchAbortRef.current?.abort();
-  }, []);
+  }, [currentPrograma, userRole]);
 
   useEffect(() => {
-    if (userRole === 'invitado') return undefined;
-    if (userRole === 'secretaria_programa' && currentPrograma === 'ALL') {
-      const programaAsignado = user?.programa_id ? String(user.programa_id) : '';
-      if (programaAsignado) {
-        queueMicrotask(() => setCurrentPrograma(programaAsignado));
-      } else {
-        queueMicrotask(() => {
-          setStudents([]);
-          setLoadError('Tu usuario no tiene un programa de estudio asignado.');
-          setLoading(false);
-        });
-      }
-      return undefined;
-    }
-    queueMicrotask(() => { handleSearch(searchTermRef.current, programaActivo); });
-    return undefined;
-  }, [programaActivo, currentPrograma, userRole, handleSearch, user?.programa_id]);
-
-  useEffect(() => {
-    if (!showModal) return undefined;
+    if (!showModal) return;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const onKeyDown = (e) => { if (e.key === 'Escape') setShowModal(false); };
@@ -784,6 +635,63 @@ export function StudentMaster() {
       window.removeEventListener('keydown', onKeyDown);
     };
   }, [showModal]);
+
+  const handleSearch = async (val = '') => {
+    setSearchTerm(val);
+    setCurrentPage(1);
+    setLoading(true);
+    setLoadError(null);
+    try {
+      let url = `${API_BASE}/api/mod-gestion-academica/estudiantes/`;
+
+      if (currentPrograma && currentPrograma !== 'ALL') {
+        url += `?programa_id=${currentPrograma}`;
+      }
+
+      const res = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+
+      if (!res.ok) {
+        let detalle = `El servicio de estudiantes respondio ${res.status}.`;
+        try {
+          const cuerpo = await res.json();
+          detalle = cuerpo.detail || cuerpo.message || detalle;
+        } catch { /* cuerpo no-JSON */ }
+        console.error('API Error:', detalle);
+        setStudents([]);
+        setLoadError(detalle);
+        setLoading(false);
+        return;
+      }
+
+      if (res.headers.get('X-Fallback') === 'true') {
+        const detalle = res.headers.get('X-Fallback-Message')
+          || 'El servicio de estudiantes respondio con datos degradados.';
+        console.error('Respuesta degradada:', detalle);
+        setStudents([]);
+        setLoadError(detalle);
+        setLoading(false);
+        return;
+      }
+
+      const data = await res.json();
+      const dataArray = Array.isArray(data) ? data : [];
+      const sorted = [...dataArray].sort(compareStudents);
+
+      const term = String(val || '').trim();
+      if (term.length >= 2) {
+        setStudents(filtrarEstudiantes(sorted, term));
+      } else {
+        setStudents(sorted);
+      }
+    } catch (e) {
+      console.error(e);
+      setStudents([]);
+      setLoadError('No se pudo conectar con el servidor. Verifique que el backend este levantado.');
+    }
+    setLoading(false);
+  };
 
   const handleFotoChange = (e) => {
     const file = e.target.files?.[0];
@@ -827,24 +735,6 @@ export function StudentMaster() {
   const handleCreate = async (e) => {
     e.preventDefault();
     if (submitting) return;
-
-    const dni = String(form.dni || '').trim();
-    if (!/^\d{8}$/.test(dni)) {
-      alert('El DNI debe tener exactamente 8 dígitos.');
-      return;
-    }
-    const correos = [form.email_institucional, form.email_personal]
-      .filter(Boolean)
-      .map(valor => String(valor).trim());
-    if (correos.some(correo => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correo))) {
-      alert('Ingrese un correo electrónico válido.');
-      return;
-    }
-    const celular = String(form.telefono_movil || '').trim();
-    if (celular && !/^(?:\+?51)?\d{9}$/.test(celular.replace(/\s/g, ''))) {
-      alert('El celular debe tener 9 dígitos (opcionalmente con +51).');
-      return;
-    }
 
     const firstInvalid = WIZARD_STEPS.find(step => sectorHasMissing(step.id));
     if (firstInvalid) {
@@ -932,12 +822,15 @@ export function StudentMaster() {
         metadata_admision,
       };
 
-      const programaCargado = (id) => Boolean(id) && programas.some(p => p.id === String(id));
-      const assignedProg = programaCargado(form.programa_id)
-        ? form.programa_id
-        : (programaCargado(currentPrograma) ? currentPrograma : null)
-          || (programaCargado(user?.programa_id) ? String(user.programa_id) : null);
-      payload.programa_id = assignedProg ? parseInt(assignedProg, 10) : null;
+      // Garantizar asignación obligatoria de programa_id
+      const assignedProg = form.programa_id
+        || (currentPrograma && currentPrograma !== 'ALL' ? currentPrograma : null)
+        || (user?.programa_id ? String(user.programa_id) : null);
+      if (!assignedProg) {
+        toast.warning('Selecciona la carrera del estudiante antes de registrarlo.');
+        return;
+      }
+      payload.programa_id = parseInt(assignedProg, 10);
 
       const res = await fetch(`${API_BASE}/api/mod-gestion-academica/estudiantes/`, {
         method: 'POST',
@@ -948,6 +841,12 @@ export function StudentMaster() {
         body: JSON.stringify(payload)
       });
       if (res.ok) {
+        const guardado = await res.json().catch(() => null);
+        const codigoFinal = guardado?.codigo_estudiante || payload.codigo_estudiante;
+        if (codigoFinal !== payload.codigo_estudiante) {
+          toast.info(`El código sugerido ya estaba en uso; se asignó ${codigoFinal}.`);
+        }
+        toast.success(`Estudiante ${payload.nombres} ${payload.apellidos} registrado con el código ${codigoFinal}.`);
         setShowModal(false);
         setForm(createEmptyStudentForm(form.programa_id));
         setWizardStep(1);
@@ -991,142 +890,59 @@ export function StudentMaster() {
   };
 
   const handleSincronizar = async () => {
-    const rol = String(userRole || '').toLowerCase().trim();
-    const rolesPermitidos = new Set(['superadmin', 'admin', 'admin_admision', 'secretaria_academica']);
-    if (!rolesPermitidos.has(rol)) {
-      toast.error('No tienes permisos para sincronizar ingresantes desde Admisión.');
+    if (userRole !== 'superadmin' && userRole !== 'admin') {
+      toast.error("Solo el Super Admin puede ejecutar la ingesta de Admisión.");
       return;
     }
 
-    const fetchConLimite = (url, options = {}, ms = 10000) => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), ms);
-      return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
-    };
-
-    const leerRespuesta = async (res) => {
-      const textBody = await res.text().catch(() => '');
-      let data = null;
-      if (textBody) {
-        try { data = JSON.parse(textBody); } catch { data = null; }
-      }
-      return { text: textBody, data };
-    };
-
-    const detalleDe = (data, textBody, fallback) => {
-      let detalle = data?.detail ?? data?.message ?? data;
-      if (Array.isArray(detalle)) {
-        detalle = detalle.map((item) => item?.msg || item?.message || JSON.stringify(item)).join(' | ');
-      } else if (detalle && typeof detalle === 'object') {
-        detalle = detalle.message || detalle.error || JSON.stringify(detalle);
-      }
-      if (!detalle && textBody && !String(textBody).trim().startsWith('<')) detalle = textBody;
-      return detalle || fallback;
-    };
-
-    const token = localStorage.getItem('token');
-    const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
-    let admisionData;
-    let admitidos;
-
-    setLoading(true);
-    try {
-      const resAdmision = await fetchConLimite(`${API_BASE}/api/mod-admision/admitidos`, {
-        headers: authHeaders
-      }, 8000);
-      const admResp = await leerRespuesta(resAdmision);
-      const fallbackAdm = resAdmision.headers.get('x-fallback') || resAdmision.headers.get('X-Fallback');
-
-      if (!resAdmision.ok) {
-        const detalle = detalleDe(admResp.data, admResp.text, `HTTP ${resAdmision.status}`);
-        throw new Error(`No se pudo obtener admitidos (${resAdmision.status}): ${detalle}`);
-      }
-
-      admisionData = admResp.data && typeof admResp.data === 'object' ? admResp.data : {};
-      if ((fallbackAdm || (admisionData && typeof admisionData.status === 'string' && 'data' in admisionData)) && !Array.isArray(admisionData.admitidos)) {
-        if (admisionData.status && admisionData.status !== 'cached') {
-          throw new Error(`Módulo de Admisión no disponible: ${admisionData.message || detalleDe(admisionData.data, '', 'sin conexión con el servicio de admisión')}`);
-        }
-        if (admisionData.data && typeof admisionData.data === 'object' && !Array.isArray(admisionData.data)) {
-          admisionData = admisionData.data;
-        }
-      }
-
-      admitidos = Array.isArray(admisionData.admitidos) ? admisionData.admitidos : [];
-    } catch (e) {
-      console.error(e);
-      if (e?.name === 'AbortError') {
-        toast.error('Tiempo de espera agotado al conectar con Admisión. Verifique que el módulo esté activo.');
-      } else {
-        toast.error(e.message || 'Error de conexión al sincronizar admisión.');
-      }
-      return;
-    } finally {
-      setLoading(false);
-    }
-
-    if (admitidos.length === 0) {
-      toast.error('Falta cargar archivo');
-      return;
-    }
-
-    const ok = await confirmDialog({
+    const ok = await confirmar({
       title: 'Sincronizar Admisión',
       message: '¿Sincronizar lista de ingresantes desde el módulo de Admisión?',
       type: 'info',
       confirmText: 'Sí, sincronizar'
     });
     if (!ok) return;
-
-    if (Array.isArray(admisionData.programas_no_reconocidos) && admisionData.programas_no_reconocidos.length > 0) {
-      toast.warning(`Programas no reconocidos en admisión: ${admisionData.programas_no_reconocidos.join(', ')}. Esos registros podrían no sincronizarse.`);
-    }
-
     setLoading(true);
     try {
-      const resIngesta = await fetchConLimite(`${API_BASE}/api/mod-gestion-academica/admision/ingesta`, {
+      // via gateway, do not puncture the module directly
+      const resAdmision = await fetch(`${API_BASE}/api/mod-admision/admitidos`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+
+      if (!resAdmision.ok) throw new Error("No se pudo conectar con el módulo de Admisión.");
+      let admisionData = await resAdmision.json();
+
+      if (!admisionData.admitidos?.length) {
+        toast.info("El módulo de Admisión no tiene ingresantes cargados. Primero sube el Excel de resultados en Administración → Admisión.");
+        setLoading(false);
+        return;
+      }
+
+      const resIngesta = await fetch(`${API_BASE}/api/mod-gestion-academica/admision/ingesta`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...authHeaders
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
         },
-        body: JSON.stringify({ ...admisionData, admitidos })
-      }, 20000);
+        body: JSON.stringify(admisionData)
+      });
 
-      const ingResp = await leerRespuesta(resIngesta);
-      const fallbackIng = resIngesta.headers.get('x-fallback') || resIngesta.headers.get('X-Fallback');
-
-      if (resIngesta.ok && !(fallbackIng && ingResp.data && ingResp.data.status && ingResp.data.status !== 'cached')) {
-        const ingestaData = (ingResp.data && ingResp.data.status === 'cached' && ingResp.data.data) ? ingResp.data.data : (ingResp.data || {});
-        const creados = ingestaData.estudiantes_creados ?? 0;
-        const existentes = ingestaData.estudiantes_existentes ?? 0;
-        const omitidos = ingestaData.omitidos ?? 0;
-        const errores = Array.isArray(ingestaData.errores) ? ingestaData.errores : [];
-        const resumen = `Sincronización completada: ${creados} nuevos, ${existentes} ya existentes, ${omitidos} omitidos.`;
-
-        if (creados > 0) toast.success(resumen);
-        else if (omitidos > 0 || errores.length > 0) toast.warning(resumen);
-        else toast.info(resumen);
-
-        if (errores.length > 0) {
-          console.warn('Errores de sincronización de admisión:', errores);
-          toast.info(`Detalle: ${errores.slice(0, 2).join(' | ')}${errores.length > 2 ? '…' : ''}`);
-        }
-        if (creados > 0 || existentes > 0) handleSearch('');
+      if (resIngesta.ok) {
+        const result = await resIngesta.json();
+        const total = admisionData.admitidos.length;
+        toast.success(result.estudiantes_creados > 0
+          ? `Sincronización exitosa: ${result.estudiantes_creados} nuevos estudiantes registrados (de ${total} ingresantes).`
+          : `Sincronización completa: los ${total} ingresantes de Admisión ya estaban registrados; no hay nuevos.`);
+        handleSearch('');
       } else {
-        const detalle = detalleDe(ingResp.data, ingResp.text, `HTTP ${resIngesta.status}`);
-        toast.error(`Error en la sincronización (${resIngesta.status}): ${detalle}`);
+        const err = await resIngesta.text();
+        toast.error(`Error en la ingesta: ${err}`);
       }
     } catch (e) {
       console.error(e);
-      if (e?.name === 'AbortError') {
-        toast.error('Tiempo de espera agotado al conectar con Admisión. Verifique que el módulo esté activo.');
-      } else {
-        toast.error(e.message || 'Error de conexión al sincronizar admisión.');
-      }
-    } finally {
-      setLoading(false);
+      toast.error(e.message);
     }
+    setLoading(false);
   };
 
   const handleNext = () => {
@@ -1202,7 +1018,7 @@ export function StudentMaster() {
                   icon={GraduationCap}
                   required
                   showMissing={showMissing}
-                  options={programasOptions}
+                  options={PROGRAMAS_OPTIONS}
                   value={form.programa_id}
                   onChange={(programaId) => setForm({ ...form, programa_id: programaId })}
                   placeholder="Buscar carrera..."
@@ -1393,7 +1209,7 @@ export function StudentMaster() {
                 <span className="block text-[11px] font-black uppercase tracking-wider text-primary mb-1 flex items-center gap-1.5">
                   <GraduationCap size={14} /> Carrera / Programa de Estudios
                 </span>
-                <span className="block text-slate-950 font-black break-words">{labelPrograma(form.programa_id)}</span>
+                <span className="block text-slate-950 font-black break-words">{getProgramaLabel(form.programa_id)}</span>
               </div>
               <div className="rounded-xl border-2 border-slate-200 bg-white p-3.5 shadow-sm">
                 <span className="block text-[11px] font-black uppercase tracking-wider text-slate-950 mb-1">Identidad</span>
@@ -1432,7 +1248,8 @@ export function StudentMaster() {
   const safeCurrentPage = Math.min(Math.max(currentPage, 1), totalPages);
   const startIndex = totalStudents === 0 ? 0 : (safeCurrentPage - 1) * pageSize;
   const endIndex = Math.min(startIndex + pageSize, totalStudents);
-  const paginatedStudents = students.slice(startIndex, endIndex);
+  // Se ordena al mostrar porque las carreras pueden cargarse después que los alumnos
+  const paginatedStudents = [...students].sort(compareStudents).slice(startIndex, endIndex);
 
   return (
     <div className="animate-fade-in lg:flex lg:flex-col lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
@@ -1465,15 +1282,15 @@ export function StudentMaster() {
             </div>
           </div>
           <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
-              {['superadmin', 'admin', 'secretaria_academica', 'admin_admision'].includes(userRole) && (
-                <button
-                  onClick={handleSincronizar}
-                  className="inline-flex items-center justify-center gap-2 px-4 sm:px-6 py-2 sm:py-2.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-xl font-bold hover:bg-indigo-100 transition-all active:scale-95 shadow-sm text-sm"
-                >
-                  <CloudDownload className="w-4 h-4 sm:w-5 sm:h-5 flex-shrink-0" />
-                  <span className="whitespace-nowrap">Sincronizar desde Admisión</span>
-                </button>
-              )}
+            {['superadmin', 'admin'].includes(userRole) && (
+              <button
+                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-white/15 border border-white/30 text-white font-semibold text-sm backdrop-blur-sm hover:bg-white/25 active:scale-[0.98] transition-all duration-200 min-h-[44px] w-full sm:w-auto"
+                onClick={handleSincronizar}
+              >
+                <CloudDownload size={18} className="shrink-0" />
+                <span className="whitespace-nowrap">Sincronizar desde Admisión</span>
+              </button>
+            )}
             <button
               className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-white text-primary font-bold text-sm shadow-lg shadow-black/10 hover:bg-primary-soft active:scale-[0.98] transition-all duration-200 min-h-[44px] w-full sm:w-auto"
               onClick={() => {
@@ -1493,8 +1310,8 @@ export function StudentMaster() {
       </div>
 
       <div className="glass-card p-3 mb-6 flex flex-col md:flex-row md:items-center gap-3 relative z-30 lg:shrink-0">
-        {['superadmin', 'admin', 'secretaria_academica', 'admin_admision'].includes(userRole) && (
-          <ProgramaFilter value={programaActivo} onChange={setCurrentPrograma} programas={programas} />
+        {!carreraFija && (
+          <ProgramaFilter programas={PROGRAMAS} value={currentPrograma} onChange={setCurrentPrograma} />
         )}
         <div className="group flex-1 flex items-center gap-3 h-[56px] pl-3 pr-3 rounded-xl border-2 border-slate-200 bg-white shadow-md transition-all duration-200 focus-within:border-primary/60 focus-within:ring-4 focus-within:ring-primary/15 focus-within:shadow-lg focus-within:shadow-primary/10">
           <span className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary-dark text-white flex items-center justify-center flex-shrink-0 shadow-md shadow-primary/40 transition-transform duration-200 group-focus-within:scale-105">
@@ -1507,7 +1324,7 @@ export function StudentMaster() {
               className="w-full bg-transparent border-none focus:ring-0 focus:shadow-none p-0 text-sm font-medium text-slate-text placeholder:text-slate-400 outline-none"
               placeholder="DNI, nombre o código..."
               value={searchTerm}
-              onChange={(e) => handleSearchInput(e.target.value)}
+              onChange={(e) => handleSearch(e.target.value)}
             />
           </div>
           {loading ? (
@@ -1560,10 +1377,10 @@ export function StudentMaster() {
             <span className="px-2.5 py-0.5 rounded-full bg-primary/10 text-primary font-black text-xs border border-primary/20">
               {totalStudents} {totalStudents === 1 ? 'registrado' : 'registrados'}
             </span>
-            {programaActivo !== 'ALL' && (
+            {currentPrograma !== 'ALL' && (
               <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 font-bold text-xs border border-slate-200 truncate max-w-[260px]">
                 <GraduationCap size={13} className="text-primary shrink-0" />
-                <span className="truncate">{labelPrograma(programaActivo)}</span>
+                <span className="truncate">{getProgramaLabel(currentPrograma)}</span>
               </span>
             )}
           </div>
@@ -1619,15 +1436,15 @@ export function StudentMaster() {
                       {loadError ? 'Datos no disponibles' : 'No se encontraron estudiantes'}
                     </p>
                     <p className="text-slate-500 text-xs mt-1 max-w-md mx-auto">
-                      {loadError || 'No hay estudiantes vigentes o matriculados que coincidan con los criterios de búsqueda o el programa seleccionado.'}
+                      {loadError || 'No hay estudiantes que coincidan con los criterios de búsqueda o el programa seleccionado.'}
                     </p>
                   </td>
                 </tr>
               ) : (
                 paginatedStudents.map(s => {
                   const initials = `${(s.nombres || '')[0] || ''}${(s.apellidos || '')[0] || ''}`.toUpperCase();
-                  const isPostulante = normalizarBusqueda(s.estado_academico) === 'postulante';
-                  const isMatriculado = esEstudianteVigente(s);
+                  const isPostulante = s.estado_academico === 'postulante';
+                  const isMatriculado = s.estado_academico === 'matriculado' || s.estado_academico === 'ingresante';
 
                   return (
                     <tr
@@ -1669,11 +1486,11 @@ export function StudentMaster() {
                       <td className="py-3.5 px-4">
                         <span
                           className="inline-flex items-center gap-1.5 max-w-[240px] truncate rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-1 text-xs font-extrabold text-primary-dark shadow-xs"
-                          title={s.programa_id ? labelPrograma(s.programa_id) : 'Sin carrera'}
+                          title={s.programa_id ? getProgramaLabel(s.programa_id) : 'Sin carrera'}
                         >
                           <GraduationCap size={13} className="shrink-0 text-primary" />
                           <span className="truncate">
-                            {s.programa_id ? labelPrograma(s.programa_id) : 'Sin carrera'}
+                            {s.programa_id ? getProgramaLabel(s.programa_id) : 'Sin carrera'}
                           </span>
                         </span>
                       </td>
