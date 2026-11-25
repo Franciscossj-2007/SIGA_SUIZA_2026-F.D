@@ -208,7 +208,7 @@ export function buildReceiptHtml(receipt) {
 export function buildStatementHtml({ student, payments, careerName, token, qrContent, emitted }) {
   const emittedAt = emitted || formatDateTime(new Date());
   const verification = formatToken(token) || '—';
-  const qr = qrToSvg(qrContent || `${INSTITUTION.sigla} - ESTADO DE CUENTA 2026\nDNI ALUMNO: ${student.dni}\nVERIFICACION: ${verification}`, { border: 1 });
+  const qr = qrToSvg(qrContent || `${INSTITUTION.sigla} - ESTADO DE CUENTA 2026\nDNI ALUMNO: ${student.dni}\\nVERIFICACIÓN: ${verification}`, { border: 1 });
 
   const pagados = payments.filter(p => p.estado === 'PAGADO');
   const totalPagado = pagados.reduce((acc, p) => acc + (parseFloat(p.monto) || 0), 0);
