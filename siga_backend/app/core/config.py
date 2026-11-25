@@ -25,7 +25,7 @@ class CoreSettings(BaseSettings):
     modules_discovery_sources: List[str] = ["local", "database", "kubernetes"]
     
     # Communication
-    http_proxy_timeout: int = 30
+    http_proxy_timeout: int = 120
     
     # Security
     token_expire_minutes: int = 30

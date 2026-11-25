@@ -66,6 +66,11 @@ async def init_db():
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all, checkfirst=True)
+            await conn.execute(text("""
+                ALTER TABLE programas_estudio
+                ALTER COLUMN created_at SET DEFAULT NOW(),
+                ALTER COLUMN updated_at SET DEFAULT NOW()
+            """))
             for programa in PROGRAMAS:
                 await conn.execute(text("""
                     INSERT INTO programas_estudio (id, nombre, codigo, duracion_periodos, creditos_totales, modalidad, estado)

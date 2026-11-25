@@ -1,9 +1,9 @@
-from fastapi import APIRouter, HTTPException, Depends, status, Request
+﻿from fastapi import APIRouter, HTTPException, Depends, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, text
+from sqlalchemy import select, func, delete, text
 from typing import List, Optional
 from datetime import datetime, date
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 from database import get_db, OutboxEvent
 from models import ProgramaEstudio, ProgramaConfiguracion, ProgramaModulo, ProgramaUnidad, ProgramaRequisito, PeriodoAcademico
 from shared.identity import (
@@ -12,71 +12,16 @@ from shared.identity import (
 from schemas import (
     SilaboUpdate, PlanTrabajoDocenteUpdate, CargaLectivaUpdate, HorarioPeriodoUpdate
 )
-from shared.validation import CodigoRequerido, TextoRequerido
-from shared.programas_catalog import obtener_programa_oficial
 
 router = APIRouter()
 
-
-def _normalizar_nombre_programa(valor: str) -> str:
-    import unicodedata
-    if not valor:
-        return ""
-    return "".join(
-        caracter for caracter in unicodedata.normalize("NFD", valor.strip().lower())
-        if unicodedata.category(caracter) != "Mn"
-    )
-
-
-def _limitar_texto(valor, limite=255):
-    if valor is None:
-        return valor
-    return str(valor).strip()[:limite]
-
-
-async def _resolver_programa_oficial(db, nombre, codigo):
-    oficial = obtener_programa_oficial(codigo) or obtener_programa_oficial(nombre)
-    if oficial is None:
-        raise HTTPException(
-            status_code=400,
-            detail="El programa de estudio debe ser uno de los 11 programas oficiales del catálogo institucional.",
-        )
-    resultado = await db.execute(
-        select(ProgramaEstudio).where(ProgramaEstudio.id == oficial["id"])
-    )
-    canonico = resultado.scalar_one_or_none()
-    existentes = (await db.execute(select(ProgramaEstudio))).scalars().all()
-    for programa in existentes:
-        if programa.id == oficial["id"]:
-            continue
-        if programa.codigo and programa.codigo.strip().upper() == oficial["codigo"]:
-            raise HTTPException(
-                status_code=400,
-                detail=f"El código '{oficial['codigo']}' ya está asignado a otro identificador.",
-            )
-        if _normalizar_nombre_programa(programa.nombre) == _normalizar_nombre_programa(oficial["nombre"]):
-            raise HTTPException(
-                status_code=400,
-                detail="Ya existe otra carrera con el mismo nombre en el catálogo institucional.",
-            )
-    return oficial, canonico
-
-
-def _aplicar_programa_oficial(programa, oficial, datos):
-    for campo, valor in datos.items():
-        setattr(programa, campo, valor)
-    programa.id = oficial["id"]
-    programa.nombre = oficial["nombre"]
-    programa.codigo = oficial["codigo"]
-
-
 # Schemas Pydantic
 class ProgramaBase(BaseModel):
-    nombre: TextoRequerido
-    codigo: CodigoRequerido
+    nombre: str
+    codigo: str
     descripcion: Optional[str] = None
-    duracion_periodos: int = Field(default=6, gt=0, le=40)
-    creditos_totales: int = Field(..., gt=0, le=1000)
+    duracion_periodos: int = 6
+    creditos_totales: int
     plan_estudio_id: Optional[int] = None
     modalidad: str = "presencial"
     estado: str = "activo"
@@ -86,57 +31,18 @@ class ProgramaCreate(ProgramaBase):
 
 class ProgramaResponse(ProgramaBase):
     id: int
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
-
-
-class UnidadPlanImport(BaseModel):
-    nombre: str
-    horas_teoria: int = 0
-    horas_practica: int = 0
-    creditos: int = 0
-    orden: int = 1
-
-
-class ModuloPlanImport(BaseModel):
-    nombre: str
-    periodo: int
-    horas_totales: int = 0
-    creditos: int = 0
-    orden: int
-    unidades: List[UnidadPlanImport] = []
-
-
-class ProgramaPlanImport(BaseModel):
-    nombre: str
-    codigo: str
-    descripcion: Optional[str] = None
-    creditos_totales: int = 0
-    duracion_periodos: int = 6
-    plan_estudio_id: Optional[int] = None
-    modulos: List[ModuloPlanImport] = []
 
 # Schemas Periodo Academico
 class PeriodoBase(BaseModel):
-    codigo: CodigoRequerido
+    codigo: str
     fecha_inicio: datetime
     fecha_fin: datetime
     estado: str = "planificacion"
     fecha_fin_matricula_regular: Optional[datetime] = None
     fecha_fin_matricula_extemporanea: Optional[datetime] = None
-
-    @model_validator(mode="after")
-    def validar_rango_fechas(self):
-        inicio = self.fecha_inicio.replace(tzinfo=None)
-        fin = self.fecha_fin.replace(tzinfo=None)
-        if fin <= inicio:
-            raise ValueError("La fecha de fin debe ser posterior a la fecha de inicio")
-        for campo in ("fecha_fin_matricula_regular", "fecha_fin_matricula_extemporanea"):
-            fecha = getattr(self, campo)
-            if fecha is not None and not (inicio <= fecha.replace(tzinfo=None) <= fin):
-                raise ValueError(f"{campo} debe estar dentro del rango del periodo")
-        return self
 
 class PeriodoCreate(PeriodoBase):
     pass
@@ -162,18 +68,25 @@ async def health_check():
 # Endpoints CRUD
 @router.post("/programas", response_model=ProgramaResponse, status_code=status.HTTP_201_CREATED)
 async def crear_programa(programa: ProgramaCreate, request: Request, db: AsyncSession = Depends(get_db)):
-    oficial, existente = await _resolver_programa_oficial(db, programa.nombre, programa.codigo)
-    datos = programa.model_dump()
-    datos["estado"] = "activo"
+    import unicodedata
+    def normalize_str(s: str) -> str:
+        if not s:
+            return ""
+        return "".join(c for c in unicodedata.normalize("NFD", s.strip().lower()) if unicodedata.category(c) != "Mn")
 
-    if existente is not None:
-        _aplicar_programa_oficial(existente, oficial, datos)
-        db_programa = existente
-    else:
-        db_programa = ProgramaEstudio(**datos)
-        _aplicar_programa_oficial(db_programa, oficial, datos)
-        db.add(db_programa)
-    await db.flush()
+    codigo_norm = programa.codigo.strip().upper()
+    nombre_norm = normalize_str(programa.nombre)
+
+    all_existentes = (await db.execute(select(ProgramaEstudio))).scalars().all()
+    for p in all_existentes:
+        if p.codigo and p.codigo.strip().upper() == codigo_norm:
+            raise HTTPException(status_code=400, detail=f"Ya existe un programa de estudio con el c├│digo '{programa.codigo}'")
+        if normalize_str(p.nombre) == nombre_norm:
+            raise HTTPException(status_code=400, detail=f"El programa de estudio '{programa.nombre}' ya existe en el cat├ílogo institucional")
+
+    db_programa = ProgramaEstudio(**programa.model_dump())
+    db.add(db_programa)
+    await db.flush() # Para obtener ID antes de crear el outbox
 
     request_id = request.headers.get("X-Request-ID", "unknown")
     event = OutboxEvent(
@@ -189,103 +102,6 @@ async def crear_programa(programa: ProgramaCreate, request: Request, db: AsyncSe
     await db.commit()
     await db.refresh(db_programa)
     return db_programa
-
-
-@router.post("/programas/sincronizar-plan")
-async def sincronizar_programa_plan(
-    payload: ProgramaPlanImport,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    nombre = _limitar_texto(payload.nombre or "")
-    codigo = _limitar_texto(payload.codigo or "").upper()
-    if not nombre or not codigo:
-        raise HTTPException(status_code=400, detail="El plan debe tener código y nombre válidos.")
-    if not payload.modulos:
-        raise HTTPException(status_code=400, detail="El plan debe incluir al menos un módulo.")
-
-    oficial, programa = await _resolver_programa_oficial(db, nombre, codigo)
-    creado = programa is None
-
-    if creado:
-        programa = ProgramaEstudio(
-            nombre=oficial["nombre"],
-            codigo=oficial["codigo"],
-            descripcion=payload.descripcion or f"Código MINEDU: {codigo}",
-            duracion_periodos=payload.duracion_periodos,
-            creditos_totales=payload.creditos_totales,
-            plan_estudio_id=payload.plan_estudio_id,
-            estado="activo",
-        )
-        programa.id = oficial["id"]
-        db.add(programa)
-        await db.flush()
-    else:
-        programa.nombre = oficial["nombre"]
-        programa.codigo = oficial["codigo"]
-        programa.descripcion = payload.descripcion or programa.descripcion
-        programa.duracion_periodos = payload.duracion_periodos
-        programa.creditos_totales = payload.creditos_totales
-        if payload.plan_estudio_id is not None:
-            programa.plan_estudio_id = payload.plan_estudio_id
-        programa.estado = "activo"
-
-    res_modulos = await db.execute(
-        select(ProgramaModulo.id).where(ProgramaModulo.programa_id == programa.id)
-    )
-    modulo_ids = res_modulos.scalars().all()
-    if modulo_ids:
-        await db.execute(
-            delete(ProgramaUnidad).where(ProgramaUnidad.programa_modulo_id.in_(modulo_ids))
-        )
-        await db.execute(
-            delete(ProgramaModulo).where(ProgramaModulo.id.in_(modulo_ids))
-        )
-
-    unidades_importadas = 0
-    for modulo in payload.modulos:
-        db_modulo = ProgramaModulo(
-            programa_id=programa.id,
-            nombre=_limitar_texto(modulo.nombre),
-            periodo=modulo.periodo,
-            horas_totales=modulo.horas_totales,
-            creditos=modulo.creditos,
-            orden=modulo.orden,
-        )
-        db.add(db_modulo)
-        await db.flush()
-        for unidad in modulo.unidades:
-            db.add(ProgramaUnidad(
-                programa_modulo_id=db_modulo.id,
-                nombre=_limitar_texto(unidad.nombre),
-                horas_teoria=unidad.horas_teoria,
-                horas_practica=unidad.horas_practica,
-                creditos=unidad.creditos,
-                orden=unidad.orden,
-            ))
-            unidades_importadas += 1
-
-    request_id = request.headers.get("X-Request-ID", "unknown")
-    db.add(OutboxEvent(
-        event_type="carrera.plan.sincronizado",
-        payload={
-            "id": programa.id,
-            "nombre": programa.nombre,
-            "codigo": programa.codigo,
-            "metadata": {"request_id": request_id},
-        },
-    ))
-    await db.commit()
-    await db.refresh(programa)
-
-    return {
-        "id": programa.id,
-        "nombre": programa.nombre,
-        "codigo": programa.codigo,
-        "creado": creado,
-        "modulos_importados": len(payload.modulos),
-        "unidades_importadas": unidades_importadas,
-    }
 
 # Endpoints Periodos Academicos
 @router.post("/periodos", response_model=PeriodoResponse, status_code=status.HTTP_201_CREATED)
@@ -313,6 +129,47 @@ async def crear_periodo(periodo: PeriodoCreate, request: Request, db: AsyncSessi
     await db.commit()
     await db.refresh(db_periodo)
     return db_periodo
+
+class PeriodoFechasUpdate(BaseModel):
+    fecha_inicio: datetime
+    fecha_fin: datetime
+    fecha_fin_matricula_regular: Optional[datetime] = None
+    fecha_fin_matricula_extemporanea: Optional[datetime] = None
+
+
+ROLES_CALENDARIO = {"admin", "secretaria_academica", "director"}
+
+
+@router.put("/periodos/{periodo_id}", response_model=PeriodoResponse)
+async def actualizar_fechas_periodo(periodo_id: int, fechas: PeriodoFechasUpdate, request: Request,
+                                    db: AsyncSession = Depends(get_db)):
+    """Corrige las fechas de un periodo existente (antes solo se pod├¡a crear o cambiar su estado,
+    as├¡ que una fecha de matr├¡cula vencida no ten├¡a arreglo)."""
+    ident = await get_identity(request, db)
+    if not (es_superadmin(ident) or set(ident.roles) & ROLES_CALENDARIO):
+        raise HTTPException(status_code=403, detail="No tiene permisos para modificar el calendario acad├®mico.")
+
+    db_periodo = (await db.execute(select(PeriodoAcademico).where(PeriodoAcademico.id == periodo_id))).scalar_one_or_none()
+    if not db_periodo:
+        raise HTTPException(status_code=404, detail="Periodo no encontrado")
+
+    data = {k: (v.replace(tzinfo=None) if v is not None and v.tzinfo else v) for k, v in fechas.model_dump().items()}
+    if data["fecha_fin"] < data["fecha_inicio"]:
+        raise HTTPException(status_code=400, detail="La fecha de fin no puede ser anterior a la de inicio.")
+    regular, extemporanea = data["fecha_fin_matricula_regular"], data["fecha_fin_matricula_extemporanea"]
+    if regular and extemporanea and extemporanea < regular:
+        raise HTTPException(status_code=400, detail="El cierre de matr├¡cula extempor├ínea no puede ser anterior al de la regular.")
+
+    for k, v in data.items():
+        setattr(db_periodo, k, v)
+    db.add(OutboxEvent(event_type="periodo.fechas_actualizadas", payload={
+        "id": db_periodo.id, "codigo": db_periodo.codigo,
+        "metadata": {"request_id": request.headers.get("X-Request-ID", "unknown")},
+    }))
+    await db.commit()
+    await db.refresh(db_periodo)
+    return db_periodo
+
 
 @router.get("/periodos", response_model=List[PeriodoResponse])
 async def obtener_periodos(db: AsyncSession = Depends(get_db)):
@@ -409,7 +266,9 @@ async def actualizar_programa(programa_id: int, programa_data: ProgramaCreate, d
     if not programa:
         raise HTTPException(status_code=404, detail="Programa no encontrado")
 
-    for field, value in programa_data.model_dump().items():
+    # Solo los campos enviados: "Editar carrera" no manda plan_estudio_id y antes lo dejaba en NULL,
+    # desvinculando el plan de estudios (y desactivando la detecci├│n de alumnos "Hist├│rico").
+    for field, value in programa_data.model_dump(exclude_unset=True).items():
         setattr(programa, field, value)
 
     await db.commit()
@@ -423,8 +282,51 @@ async def eliminar_programa(programa_id: int, request: Request, db: AsyncSession
     if not db_programa:
         raise HTTPException(status_code=404, detail="Programa no encontrado")
 
-    db_programa.estado = "inactivo"
+    # Verificar si hay estudiantes vinculados
+    res_estudiantes = await db.execute(
+        select(func.count()).select_from(text("estudiantes")).where(text("programa_id = :pid")),
+        {"pid": programa_id}
+    )
+    total_estudiantes = res_estudiantes.scalar() or 0
+    if total_estudiantes > 0:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"No se puede eliminar el programa porque tiene {total_estudiantes} estudiantes asociados. Si ya no se oferta, se recomienda cambiar su estado a 'Inactivo' o 'En liquidaci├│n'."
+        )
 
+    # Eliminar configuraciones asociadas
+    await db.execute(
+        delete(ProgramaConfiguracion).where(ProgramaConfiguracion.programa_id == programa_id)
+    )
+
+    # Eliminar requisitos asociados
+    await db.execute(
+        delete(ProgramaRequisito).where(ProgramaRequisito.programa_id == programa_id)
+    )
+
+    # Eliminar unidades de los m├│dulos del programa
+    res_modulos = await db.execute(
+        select(ProgramaModulo.id).where(ProgramaModulo.programa_id == programa_id)
+    )
+    modulo_ids = res_modulos.scalars().all()
+    if modulo_ids:
+        await db.execute(
+            delete(ProgramaUnidad).where(ProgramaUnidad.programa_modulo_id.in_(modulo_ids))
+        )
+        await db.execute(
+            delete(ProgramaModulo).where(ProgramaModulo.id.in_(modulo_ids))
+        )
+
+    # Eliminar tutor├¡as, horarios, planes docentes y cargas si existieran
+    await db.execute(text("DELETE FROM tutorias WHERE programa_id = :pid"), {"pid": programa_id})
+    await db.execute(text("DELETE FROM horarios_periodo WHERE programa_id = :pid"), {"pid": programa_id})
+    await db.execute(text("DELETE FROM planes_trabajo_docente WHERE programa_id = :pid"), {"pid": programa_id})
+    await db.execute(text("DELETE FROM carga_lectiva WHERE programa_id = :pid"), {"pid": programa_id})
+
+    # Eliminar el programa
+    await db.delete(db_programa)
+
+    # Registrar evento en outbox
     request_id = request.headers.get("X-Request-ID", "unknown")
     event = OutboxEvent(
         event_type="carrera.eliminada",
@@ -438,11 +340,11 @@ async def eliminar_programa(programa_id: int, request: Request, db: AsyncSession
     db.add(event)
     await db.commit()
 
-    return {"message": "Programa de estudio desactivado exitosamente", "id": programa_id}
+    return {"message": "Programa de estudio eliminado exitosamente", "id": programa_id}
 
 class ProgramaConfiguracionCreate(BaseModel):
     periodo_academico: Optional[int] = 1
-    turnos: Optional[List[str]] = ["mañana", "noche"]
+    turnos: Optional[List[str]] = ["ma├▒ana", "noche"]
     coordinador_id: Optional[int] = None
     max_estudiantes: Optional[int] = 35
 
@@ -458,11 +360,11 @@ async def obtener_configuracion_programa(programa_id: int, db: AsyncSession = De
         return {
             "programa_id": programa_id,
             "periodo_academico": 1,
-            "turnos": ["mañana", "noche"],
+            "turnos": ["ma├▒ana", "noche"],
             "coordinador_id": None,
             "max_estudiantes": 35
         }
-    turnos_list = config.turnos if isinstance(config.turnos, list) else (list(config.turnos.keys()) if isinstance(config.turnos, dict) else ["mañana"])
+    turnos_list = config.turnos if isinstance(config.turnos, list) else (list(config.turnos.keys()) if isinstance(config.turnos, dict) else ["ma├▒ana"])
     return {
         "id": config.id,
         "programa_id": config.programa_id,
@@ -552,20 +454,20 @@ async def eliminar_modulo(modulo_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ProgramaModulo).where(ProgramaModulo.id == modulo_id))
     modulo = result.scalar_one_or_none()
     if not modulo:
-        raise HTTPException(status_code=404, detail="Módulo no encontrado")
+        raise HTTPException(status_code=404, detail="M├│dulo no encontrado")
     await db.delete(modulo)
     await db.commit()
-    return {"message": "Módulo eliminado exitosamente"}
+    return {"message": "M├│dulo eliminado exitosamente"}
 
 @router.delete("/unidades/{unidad_id}")
 async def eliminar_unidad(unidad_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ProgramaUnidad).where(ProgramaUnidad.id == unidad_id))
     unidad = result.scalar_one_or_none()
     if not unidad:
-        raise HTTPException(status_code=404, detail="Unidad didáctica no encontrada")
+        raise HTTPException(status_code=404, detail="Unidad did├íctica no encontrada")
     await db.delete(unidad)
     await db.commit()
-    return {"message": "Unidad didáctica eliminada exitosamente"}
+    return {"message": "Unidad did├íctica eliminada exitosamente"}
 
 @router.get("/programas/{programa_id}/malla")
 async def obtener_malla(programa_id: int, db: AsyncSession = Depends(get_db)):
@@ -600,7 +502,18 @@ async def obtener_malla(programa_id: int, db: AsyncSession = Depends(get_db)):
 
     return malla
 
-# --- Schemas Coordinación (Carga Lectiva y Horarios) ---
+@router.delete("/programas/{programa_id}")
+async def eliminar_programa(programa_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(ProgramaEstudio).where(ProgramaEstudio.id == programa_id))
+    programa = result.scalar_one_or_none()
+    if not programa:
+        raise HTTPException(status_code=404, detail="Programa no encontrado")
+
+    programa.estado = "inactivo"
+    await db.commit()
+    return {"message": "Programa eliminado correctamente"}
+
+# --- Schemas Coordinaci├│n (Carga Lectiva y Horarios) ---
 class CargaLectivaBase(BaseModel):
     periodo_id: int
     docente_id: int
@@ -645,7 +558,7 @@ class HorarioPeriodoResponse(HorarioPeriodoBase):
     updated_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
-# --- Endpoints Coordinación ---
+# --- Endpoints Coordinaci├│n ---
 from models import CargaLectiva, HorarioPeriodo
 
 async def _validar_acceso_docente(ident: Identity, docente_id: int, db: AsyncSession):
@@ -662,7 +575,7 @@ async def _validar_acceso_docente(ident: Identity, docente_id: int, db: AsyncSes
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="No tiene permisos para acceder a la información de este docente"
+        detail="No tiene permisos para acceder a la informaci├│n de este docente"
     )
 
 @router.post("/programas/{programa_id}/carga-lectiva", response_model=CargaLectivaResponse, status_code=status.HTTP_201_CREATED)
@@ -674,7 +587,7 @@ async def crear_carga_lectiva(programa_id: int, carga: CargaLectivaCreate, reque
             detail="No tiene permisos para gestionar la carga lectiva de este programa"
         )
 
-    # 1. Validar que el docente exista, esté activo y tenga rol docente o coordinador_programa
+    # 1. Validar que el docente exista, est├® activo y tenga rol docente o coordinador_programa
     doc_res = await db.execute(
         text("""
             SELECT u.is_active, r.name 
@@ -698,7 +611,21 @@ async def crear_carga_lectiva(programa_id: int, carga: CargaLectivaCreate, reque
             detail="El usuario asignado debe poseer rol docente o coordinador_programa"
         )
 
-    # 2. Validar que el periodo académico no esté cerrado
+    # El coordinador solo asigna docentes de su propio programa; docentes de otras carreras
+    # solo puede asignarlos el administrador.
+    if not es_superadmin(ident):
+        prog_doc = await db.execute(
+            text("SELECT programa_estudio_id FROM perfiles_personal WHERE user_id = :did"),
+            {"did": carga.docente_id}
+        )
+        fila_prog = prog_doc.fetchone()
+        if not fila_prog or fila_prog[0] != programa_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Solo puede asignar docentes de su propio programa de estudios. Para asignar un docente de otra carrera, p├¡dalo al administrador."
+            )
+
+    # 2. Validar que el periodo acad├®mico no est├® cerrado
     per_res = await db.execute(
         text("SELECT estado FROM periodos_academicos WHERE id = :pid"),
         {"pid": carga.periodo_id}
@@ -707,7 +634,7 @@ async def crear_carga_lectiva(programa_id: int, carga: CargaLectivaCreate, reque
     if not per_row or per_row[0] in ("cerrado", "finalizado"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="No se puede asignar carga lectiva en un periodo académico cerrado o finalizado"
+            detail="No se puede asignar carga lectiva en un periodo acad├®mico cerrado o finalizado"
         )
 
     # 3. Validar duplicidad
@@ -722,7 +649,7 @@ async def crear_carga_lectiva(programa_id: int, carga: CargaLectivaCreate, reque
     if duplicada.scalars().first():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Esa unidad didáctica ya tiene un docente asignado en este periodo y sección",
+            detail="Esa unidad did├íctica ya tiene un docente asignado en este periodo y secci├│n",
         )
     db_carga = CargaLectiva(**carga.model_dump(), programa_id=programa_id)
     db.add(db_carga)
@@ -760,7 +687,7 @@ async def clonar_carga_lectiva(programa_id: int, req: ClonarCargaRequest, reques
     if not per_row or per_row[0] in ("cerrado", "finalizado"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="No se puede clonar carga lectiva hacia un periodo académico cerrado o finalizado"
+            detail="No se puede clonar carga lectiva hacia un periodo acad├®mico cerrado o finalizado"
         )
 
     result = await db.execute(
@@ -887,14 +814,14 @@ async def eliminar_carga_lectiva(programa_id: int, carga_id: int, request: Reque
         raise HTTPException(status_code=404, detail="Carga lectiva no encontrada")
 
     # Reglas de negocio para evitar saltarse el cierre de actas:
-    # 1. No se puede eliminar si el acta ya está cerrada
+    # 1. No se puede eliminar si el acta ya est├í cerrada
     if getattr(db_carga, "acta_cerrada", False):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="No se puede eliminar la carga lectiva porque su acta se encuentra formalmente cerrada."
         )
 
-    # 2. No se puede eliminar si ya existen registros de evaluación para esa unidad y periodo
+    # 2. No se puede eliminar si ya existen registros de evaluaci├│n para esa unidad y periodo
     ev_res = await db.execute(
         text("SELECT 1 FROM evaluacion_registros WHERE unidad_didactica_id = :uid AND periodo_id = :pid LIMIT 1"),
         {"uid": db_carga.unidad_didactica_id, "pid": db_carga.periodo_id}
@@ -923,8 +850,8 @@ async def eliminar_horario(programa_id: int, horario_id: int, db: AsyncSession =
     "/programas/{programa_id}/carga-lectiva/{carga_id}",
     response_model=CargaLectivaResponse,
     status_code=status.HTTP_200_OK,
-    summary="Actualizar asignación de carga lectiva",
-    tags=["Coordinación - Carga Lectiva"]
+    summary="Actualizar asignaci├│n de carga lectiva",
+    tags=["Coordinaci├│n - Carga Lectiva"]
 )
 async def actualizar_carga_lectiva(
     programa_id: int,
@@ -934,9 +861,9 @@ async def actualizar_carga_lectiva(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Actualiza los datos de una asignación de carga lectiva (docente, turno, sección, estado, fecha límite).
+    Actualiza los datos de una asignaci├│n de carga lectiva (docente, turno, secci├│n, estado, fecha l├¡mite).
     """
-    # 1. Autenticación y Autorización RBAC
+    # 1. Autenticaci├│n y Autorizaci├│n RBAC
     ident = await get_identity(request, db)
     if not (es_superadmin(ident) or es_coordinador_de(ident, programa_id)):
         raise HTTPException(
@@ -968,14 +895,14 @@ async def actualizar_carga_lectiva(
             detail="Carga lectiva no encontrada"
         )
 
-    # 4. Candado de Cierre de Actas (Seguro Crítico Anti-Bypass)
+    # 4. Candado de Cierre de Actas (Seguro Cr├¡tico Anti-Bypass)
     if getattr(db_carga, "acta_cerrada", False):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="No se puede modificar la carga lectiva porque su acta se encuentra formalmente cerrada."
         )
 
-    # 5. Validar que el periodo académico permita modificaciones
+    # 5. Validar que el periodo acad├®mico permita modificaciones
     per_res = await db.execute(
         text("SELECT estado FROM periodos_academicos WHERE id = :pid"),
         {"pid": db_carga.periodo_id}
@@ -984,7 +911,7 @@ async def actualizar_carga_lectiva(
     if not per_row or per_row[0] in ("cerrado", "finalizado"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="No se puede modificar carga lectiva en un periodo académico cerrado o finalizado"
+            detail="No se puede modificar carga lectiva en un periodo acad├®mico cerrado o finalizado"
         )
 
     update_data = carga_in.model_dump(exclude_unset=True)
@@ -1016,7 +943,7 @@ async def actualizar_carga_lectiva(
                     detail="El usuario asignado debe poseer rol docente o coordinador_programa"
                 )
 
-    # 7. Validar duplicidad de sección si fue modificada
+    # 7. Validar duplicidad de secci├│n si fue modificada
     if "seccion" in update_data and update_data["seccion"] is not None:
         nueva_seccion = update_data["seccion"]
         if nueva_seccion != db_carga.seccion:
@@ -1032,15 +959,15 @@ async def actualizar_carga_lectiva(
             if duplicada.scalars().first():
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail="Esa unidad didáctica ya tiene un docente asignado en este periodo y sección"
+                    detail="Esa unidad did├íctica ya tiene un docente asignado en este periodo y secci├│n"
                 )
 
-    # 8. Validar fecha límite no retroactiva
+    # 8. Validar fecha l├¡mite no retroactiva
     if "fecha_limite_notas" in update_data and update_data["fecha_limite_notas"] is not None:
         if update_data["fecha_limite_notas"] < date.today():
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="La fecha límite no puede ser anterior a la fecha actual"
+                detail="La fecha l├¡mite no puede ser anterior a la fecha actual"
             )
 
     # 9. Validar estado permitido
@@ -1048,7 +975,7 @@ async def actualizar_carga_lectiva(
         if update_data["estado"] not in ("borrador", "revision", "publicado"):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Estado inválido para la carga lectiva. Valores permitidos: borrador, revision, publicado"
+                detail="Estado inv├ílido para la carga lectiva. Valores permitidos: borrador, revision, publicado"
             )
 
     # 10. Aplicar cambios a la entidad
@@ -1056,7 +983,7 @@ async def actualizar_carga_lectiva(
         setattr(db_carga, key, value)
     db_carga.updated_at = datetime.utcnow()
 
-    # 11. Registrar evento Outbox para sincronización / auditoría
+    # 11. Registrar evento Outbox para sincronizaci├│n / auditor├¡a
     event = OutboxEvent(
         event_type="programas.carga_lectiva.actualizada",
         payload={
@@ -1073,7 +1000,7 @@ async def actualizar_carga_lectiva(
     )
     db.add(event)
 
-    # 12. Commit asíncrono (sin db.refresh)
+    # 12. Commit as├¡ncrono (sin db.refresh)
     await db.commit()
 
     # 13. Enriquecer metadatos para CargaLectivaResponse
@@ -1125,7 +1052,7 @@ async def actualizar_carga_lectiva(
     response_model=HorarioPeriodoResponse,
     status_code=status.HTTP_200_OK,
     summary="Actualizar archivo, estado u observaciones de un horario",
-    tags=["Coordinación - Horarios"]
+    tags=["Coordinaci├│n - Horarios"]
 )
 async def actualizar_horario(
     programa_id: int,
@@ -1137,7 +1064,7 @@ async def actualizar_horario(
     """
     Actualiza la URL del archivo, el estado o las observaciones de un horario de periodo.
     """
-    # 1. Autenticación y Autorización RBAC
+    # 1. Autenticaci├│n y Autorizaci├│n RBAC
     ident = await get_identity(request, db)
     if not (es_superadmin(ident) or es_coordinador_de(ident, programa_id)):
         raise HTTPException(
@@ -1169,7 +1096,7 @@ async def actualizar_horario(
             detail="Horario no encontrado"
         )
 
-    # 4. Validar que el periodo académico no esté cerrado o finalizado
+    # 4. Validar que el periodo acad├®mico no est├® cerrado o finalizado
     per_res = await db.execute(
         text("SELECT estado FROM periodos_academicos WHERE id = :pid"),
         {"pid": db_horario.periodo_id}
@@ -1178,7 +1105,7 @@ async def actualizar_horario(
     if per_row and per_row[0] in ("cerrado", "finalizado"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="No se puede modificar el horario de un periodo académico cerrado o finalizado"
+            detail="No se puede modificar el horario de un periodo acad├®mico cerrado o finalizado"
         )
 
     update_data = horario_in.model_dump(exclude_unset=True)
@@ -1188,7 +1115,7 @@ async def actualizar_horario(
         if update_data["estado"] not in ("borrador", "revision", "publicado"):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Estado inválido para el horario. Valores permitidos: borrador, revision, publicado"
+                detail="Estado inv├ílido para el horario. Valores permitidos: borrador, revision, publicado"
             )
 
     # 6. Actualizar campos en el modelo
@@ -1209,11 +1136,11 @@ async def actualizar_horario(
     )
     db.add(event)
 
-    # 8. Commit asíncrono y respuesta directa
+    # 8. Commit as├¡ncrono y respuesta directa
     await db.commit()
     return HorarioPeriodoResponse.model_validate(db_horario)
 
-# --- Schemas Docente (Sílabo y Plan de Trabajo) ---
+# --- Schemas Docente (S├¡labo y Plan de Trabajo) ---
 class SilaboBase(BaseModel):
     carga_lectiva_id: int
     estado: Optional[str] = "borrador"
@@ -1246,7 +1173,7 @@ class PlanTrabajoDocenteResponse(PlanTrabajoDocenteBase):
     updated_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
-# --- Endpoints Docente (Sílabos y Planes) ---
+# --- Endpoints Docente (S├¡labos y Planes) ---
 from models import Silabo, PlanTrabajoDocente
 
 @router.get("/docente/{docente_id}/carga-lectiva", response_model=List[CargaLectivaResponse])
@@ -1259,7 +1186,7 @@ async def obtener_carga_docente(docente_id: int, request: Request, periodo_id: O
 async def crear_silabo(silabo: SilaboCreate, request: Request, db: AsyncSession = Depends(get_db)):
     ident = await get_identity(request, db)
 
-    # 1. Obtener la carga lectiva para validar que exista y a qué docente pertenece
+    # 1. Obtener la carga lectiva para validar que exista y a qu├® docente pertenece
     res_cl = await db.execute(
         select(CargaLectiva).where(CargaLectiva.id == silabo.carga_lectiva_id)
     )
@@ -1271,10 +1198,10 @@ async def crear_silabo(silabo: SilaboCreate, request: Request, db: AsyncSession 
     if not (es_superadmin(ident) or ident.user_id == db_cl.docente_id or es_coordinador_de(ident, db_cl.programa_id)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tiene permisos para registrar el sílabo de una carga lectiva que no le pertenece"
+            detail="No tiene permisos para registrar el s├¡labo de una carga lectiva que no le pertenece"
         )
 
-    # 3. Upsert: Si ya existe sílabo para esta carga lectiva, actualizar datos en lugar de fallar
+    # 3. Upsert: Si ya existe s├¡labo para esta carga lectiva, actualizar datos en lugar de fallar
     res_silabo = await db.execute(
         select(Silabo).where(Silabo.carga_lectiva_id == silabo.carga_lectiva_id)
     )
@@ -1363,14 +1290,14 @@ async def listar_planes_trabajo(docente_id: int, periodo_id: int, request: Reque
     result = await db.execute(query)
     return result.scalars().all()
 
-# --- Endpoints Coordinador (Revisión) ---
+# --- Endpoints Coordinador (Revisi├│n) ---
 @router.get("/programas/{programa_id}/silabos", response_model=List[SilaboResponse])
 async def listar_silabos_programa(programa_id: int, periodo_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     ident = await get_identity(request, db)
     if not (es_superadmin(ident) or es_coordinador_de(ident, programa_id)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tiene permisos para revisar los sílabos de este programa"
+            detail="No tiene permisos para revisar los s├¡labos de este programa"
         )
 
     result = await db.execute(
@@ -1403,7 +1330,7 @@ async def actualizar_silabo(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Actualiza los datos de un sílabo existente (archivo_url, estado, observaciones).
+    Actualiza los datos de un s├¡labo existente (archivo_url, estado, observaciones).
     Permitido para:
     - Docente asignado a la carga lectiva asociada (no puede autoaprobar).
     - Coordinador del programa de estudio de la carga.
@@ -1411,7 +1338,7 @@ async def actualizar_silabo(
     """
     ident = await get_identity(request, db)
 
-    # 1. Obtener sílabo y carga_lectiva asociada para resolver permisos
+    # 1. Obtener s├¡labo y carga_lectiva asociada para resolver permisos
     result = await db.execute(
         select(Silabo, CargaLectiva.programa_id, CargaLectiva.docente_id)
         .outerjoin(CargaLectiva, Silabo.carga_lectiva_id == CargaLectiva.id)
@@ -1426,25 +1353,25 @@ async def actualizar_silabo(
 
     db_silabo, programa_id, docente_id = row
 
-    # 2. Comprobación de Titularidad y Autorización RBAC / BOLA
+    # 2. Comprobaci├│n de Titularidad y Autorizaci├│n RBAC / BOLA
     es_docente_propietario = (docente_id is not None and ident.user_id == docente_id)
     es_coordinador_programa = (programa_id is not None and es_coordinador_de(ident, programa_id))
 
     if not (es_superadmin(ident) or es_coordinador_programa or es_docente_propietario):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tiene permisos para modificar este sílabo"
+            detail="No tiene permisos para modificar este s├¡labo"
         )
 
-    # 3. Blindaje de Regla de Negocio: Un docente no puede autoaprobar su propio sílabo
+    # 3. Blindaje de Regla de Negocio: Un docente no puede autoaprobar su propio s├¡labo
     if es_docente_propietario and not (es_superadmin(ident) or es_coordinador_programa):
         if silabo.estado == "aprobado":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Solo el coordinador de programa puede aprobar el sílabo"
+                detail="Solo el coordinador de programa puede aprobar el s├¡labo"
             )
 
-    # 4. Actualización selectiva de atributos presentes en el body
+    # 4. Actualizaci├│n selectiva de atributos presentes en el body
     update_data = silabo.model_dump(exclude_unset=True)
     if "archivo_url" in update_data:
         db_silabo.archivo_url = update_data["archivo_url"]
@@ -1463,7 +1390,7 @@ async def actualizar_silabo(
 async def actualizar_estado_silabo(silabo_id: int, estado: str, request: Request, observaciones: str = None, db: AsyncSession = Depends(get_db)):
     ident = await get_identity(request, db)
 
-    # 1. Obtener el sílabo y la carga_lectiva asociada para deducir el programa_id
+    # 1. Obtener el s├¡labo y la carga_lectiva asociada para deducir el programa_id
     result = await db.execute(
         select(Silabo, CargaLectiva.programa_id)
         .join(CargaLectiva, Silabo.carga_lectiva_id == CargaLectiva.id)
@@ -1478,7 +1405,7 @@ async def actualizar_estado_silabo(silabo_id: int, estado: str, request: Request
     if not (es_superadmin(ident) or es_coordinador_de(ident, programa_id)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tiene permisos para modificar el estado del sílabo de este programa"
+            detail="No tiene permisos para modificar el estado del s├¡labo de este programa"
         )
     
     db_silabo.estado = estado
@@ -1516,7 +1443,7 @@ async def actualizar_plan_trabajo(
             detail="Plan de trabajo no encontrado"
         )
 
-    # 2. Comprobación de Titularidad y Autorización RBAC / BOLA
+    # 2. Comprobaci├│n de Titularidad y Autorizaci├│n RBAC / BOLA
     es_docente_propietario = (ident.user_id == db_plan.docente_id)
     es_coordinador_programa = (db_plan.programa_id is not None and es_coordinador_de(ident, db_plan.programa_id))
 
@@ -1534,7 +1461,7 @@ async def actualizar_plan_trabajo(
                 detail="Solo el coordinador de programa puede aprobar el plan de trabajo"
             )
 
-    # 4. Actualización selectiva de campos
+    # 4. Actualizaci├│n selectiva de campos
     update_data = plan.model_dump(exclude_unset=True)
     if "archivo_url" in update_data:
         db_plan.archivo_url = update_data["archivo_url"]
@@ -1572,7 +1499,7 @@ async def actualizar_estado_plan(plan_id: int, estado: str, request: Request, ob
     await db.commit()
     return PlanTrabajoDocenteResponse.model_validate(db_plan)
 
-# --- Schemas y Endpoints (Tutorías) ---
+# --- Schemas y Endpoints (Tutor├¡as) ---
 class TutoriaBase(BaseModel):
     periodo_id: int
     docente_id: int
@@ -1596,7 +1523,7 @@ async def crear_tutoria(programa_id: int, tutoria: TutoriaCreate, request: Reque
     if not (es_superadmin(ident) or es_coordinador_de(ident, programa_id)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tiene permisos para gestionar tutorías en este programa"
+            detail="No tiene permisos para gestionar tutor├¡as en este programa"
         )
 
     result = await db.execute(
@@ -1631,8 +1558,94 @@ async def eliminar_tutoria(programa_id: int, tutoria_id: int, db: AsyncSession =
     result = await db.execute(select(Tutoria).where(Tutoria.id == tutoria_id, Tutoria.programa_id == programa_id))
     db_tutoria = result.scalar_one_or_none()
     if not db_tutoria:
-        raise HTTPException(status_code=404, detail="Tutoría no encontrada")
+        raise HTTPException(status_code=404, detail="Tutor├¡a no encontrada")
     await db.delete(db_tutoria)
     await db.commit()
-    return {"message": "Tutoría eliminada"}
+    return {"message": "Tutor├¡a eliminada"}
+
+
+
+# ==========================================
+# DOCUMENTOS (s├¡labos y planes de trabajo)
+# ==========================================
+# Antes la subida era simulada: solo se guardaba "/docs/planes/<nombre>" y "Ver Doc" abr├¡a una
+# ruta inexistente (Vercel devolv├¡a la app y parec├¡a que todo se reiniciaba). Ahora el archivo
+# se guarda en la base de datos y se sirve por el gateway con la sesi├│n del usuario.
+import base64
+import binascii
+from fastapi import Response
+from models import DocumentoArchivo
+
+MAX_DOCUMENTO_BYTES = 8 * 1024 * 1024  # 8 MB
+TIPOS_DOCUMENTO = {
+    "application/pdf", "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "image/png", "image/jpeg",
+}
+EXTENSIONES_DOCUMENTO = {
+    ".pdf": "application/pdf", ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+}
+ROLES_DOCUMENTOS = {"docente", "coordinador_programa", "secretaria_academica", "secretaria_programa", "director", "admin"}
+
+
+class DocumentoSubida(BaseModel):
+    nombre: str
+    content_type: Optional[str] = None
+    contenido_base64: str
+
+
+@router.post("/archivos", status_code=status.HTTP_201_CREATED)
+async def subir_documento(doc: DocumentoSubida, request: Request, db: AsyncSession = Depends(get_db)):
+    ident = await get_identity(request, db)
+    if not (es_superadmin(ident) or ROLES_DOCUMENTOS.intersection(ident.roles)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tiene permisos para subir documentos")
+
+    nombre = (doc.nombre or "").strip().replace("\\", "/").split("/")[-1][:200] or "documento"
+    extension = ("." + nombre.rsplit(".", 1)[-1].lower()) if "." in nombre else ""
+    content_type = (doc.content_type or "").split(";")[0].strip().lower()
+    if content_type not in TIPOS_DOCUMENTO:
+        content_type = EXTENSIONES_DOCUMENTO.get(extension, "")
+    if content_type not in TIPOS_DOCUMENTO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Formato no permitido. Suba un PDF, Word, Excel o imagen (PNG/JPG).")
+
+    contenido = doc.contenido_base64.split(",", 1)[-1]  # admite "data:...;base64,xxxx"
+    try:
+        datos = base64.b64decode(contenido, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El archivo lleg├│ da├▒ado. Vuelva a intentarlo.")
+    if not datos:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El archivo est├í vac├¡o.")
+    if len(datos) > MAX_DOCUMENTO_BYTES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El archivo supera el m├íximo de 8 MB.")
+
+    registro = DocumentoArchivo(nombre=nombre, content_type=content_type, tamano=len(datos), datos=datos, subido_por=ident.user_id)
+    db.add(registro)
+    await db.commit()
+    await db.refresh(registro)
+    return {
+        "id": registro.id,
+        "nombre": registro.nombre,
+        "tamano": registro.tamano,
+        "url": f"/api/mod-programas-estudio/archivos/{registro.id}",
+    }
+
+
+@router.get("/archivos/{archivo_id}")
+async def descargar_documento(archivo_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    await get_identity(request, db)  # solo usuarios con sesi├│n
+    registro = await db.get(DocumentoArchivo, archivo_id)
+    if not registro:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="El documento no existe o fue eliminado")
+    nombre_ascii = registro.nombre.encode("ascii", "ignore").decode() or "documento"
+    return Response(
+        content=registro.datos,
+        media_type=registro.content_type,
+        headers={"Content-Disposition": f'inline; filename="{nombre_ascii}"', "Cache-Control": "private, max-age=0"},
+    )
 
